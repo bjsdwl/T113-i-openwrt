@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+// DTS 集成了：MiniEVM 电源 + 千兆 RGMII + NAND + USB + HDMI 显示
 /dts-v1/;
 
 #include "sun8i-t113s.dtsi"

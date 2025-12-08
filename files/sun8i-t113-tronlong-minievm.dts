@@ -6,12 +6,12 @@
 #include <dt-bindings/leds/common.h>
 
 / {
-	model = "Tronlong TLT113-MiniEVM (NAND)";
+	model = "Tronlong TLT113-MiniEVM (NAND/RGMII)";
 	compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113s", "allwinner,sun8i";
 
 	aliases {
 		serial0 = &uart0;
-		ethernet0 = &emac; /* 百兆 RMII */
+		ethernet0 = &emac; /* 千兆 RGMII */
 		ethernet1 = &usbether;
 		spi0 = &spi0;
 	};
@@ -20,14 +20,13 @@
 		stdout-path = "serial0:115200n8";
 	};
 
-	/* 定义板载电源调节器 */
+	/* 板载 USB VBUS 电源 (MiniEVM 特有: PB12) */
 	reg_usb1_vbus: usb1-vbus {
 		compatible = "regulator-fixed";
 		regulator-name = "usb1-vbus";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
 		regulator-enable-ramp-delay = <1000>;
-		/* 官方 DTS: PB12 控制 USB 供电 */
 		gpio = <&pio 1 12 GPIO_ACTIVE_HIGH>; /* PB12 */
 		enable-active-high;
 		regulator-always-on;
@@ -35,12 +34,12 @@
 
 	leds {
 		compatible = "gpio-leds";
-		/* 核心板上的 LED (参考核心板手册 Page 9) */
+		/* 核心板 LED (PC0) */
 		led-0 {
 			function = LED_FUNCTION_STATUS;
 			color = <LED_COLOR_ID_GREEN>;
 			label = "tlt113:green:status";
-			gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
+			gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "heartbeat";
 		};
 	};
@@ -50,23 +49,24 @@
 };
 
 &pio {
-	/* 官方 DTS: UART0 使用 PG17, PG18 */
+	/* UART0 引脚 (PG17/18) */
 	uart0_pg_pins: uart0-pg-pins {
 		pins = "PG17", "PG18";
 		function = "uart0";
 	};
 
-	/* 官方 DTS: GMAC0 使用 PE0-PE10 (RMII模式) */
-	emac_rmii_pins: emac-rmii-pins {
-		pins = "PE0", "PE1", "PE2", "PE3", "PE4",
-		       "PE5", "PE6", "PE7", "PE8", "PE9", "PE10";
+	/* RGMII 千兆网口引脚 (PG组) - 对应原理图 */
+	emac_rgmii_pins: emac-rgmii-pins {
+		pins = "PG0", "PG1", "PG2", "PG3", "PG4", "PG5", "PG6",
+		       "PG7", "PG8", "PG9", "PG10", "PG12",
+		       "PG14", "PG15";
 		function = "emac";
 		drive-strength = <40>;
 	};
     
 	/* SPI0 (NAND) 引脚 */
 	spi0_pins: spi0-pins {
-		pins = "PC2", "PC4", "PC5", "PC6", "PC7"; /* CLK, MOSI, MISO, WP, HOLD */
+		pins = "PC2", "PC4", "PC5", "PC6", "PC7"; 
 		function = "spi0";
 	};
 	spi0_cs0_pin: spi0-cs0-pin {
@@ -74,7 +74,7 @@
 		function = "spi0";
 	};
 	
-	/* SD卡检测脚，通常 MiniEVM 也是 PF6，如不同请修改 */
+	/* SD卡检测脚 (PF6) */
 	mmc0_cd_pin: mmc0-cd-pin {
 		pins = "PF6";
 		function = "gpio_in";
@@ -89,7 +89,7 @@
 	status = "okay";
 };
 
-/* --- SD卡 (启动用) --- */
+/* --- SD卡 --- */
 &mmc0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&mmc0_pins>;
@@ -99,7 +99,7 @@
 	status = "okay";
 };
 
-/* --- 禁用 eMMC --- */
+/* --- 禁用 eMMC (启用 SPI0) --- */
 &mmc2 { status = "disabled"; };
 
 /* --- SPI NAND Flash --- */
@@ -131,13 +131,13 @@
 	};
 };
 
-/* --- 以太网 (ETH0 - RMII 100M) --- */
-/* 根据 MiniEVM 官方 DTS 适配 */
+/* --- 以太网 (RGMII 1000M - YT8521SH) --- */
+/* 依据: 原理图 Address 0, Reset PG13 */
 &emac {
 	pinctrl-names = "default";
-	pinctrl-0 = <&emac_rmii_pins>;
-	phy-mode = "rmii"; 
-	phy-handle = <&ext_rmii_phy>;
+	pinctrl-0 = <&emac_rgmii_pins>;
+	phy-mode = "rgmii-id"; 
+	phy-handle = <&ext_rgmii_phy>;
 	status = "okay";
 
 	mdio {
@@ -145,11 +145,19 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		/* PHY 地址通常为 1 (根据全志默认 RMII 设计) */
-		/* 如果不通，尝试改为 0 */
-		ext_rmii_phy: ethernet-phy@1 {
+		ext_rgmii_phy: ethernet-phy@0 {
 			compatible = "ethernet-phy-ieee802.3-c22";
-			reg = <1>; 
+			reg = <0>; /* 原理图明确标注 Address: 00000 */
+            
+            /* 复位配置: PG13 */
+            reset-gpios = <&pio 6 13 GPIO_ACTIVE_LOW>;
+            reset-assert-us = <10000>;
+            reset-deassert-us = <150000>;
+
+            /* 裕太微 YT8521 必须开启时钟输出 */
+			motorcomm,clk-out-frequency-hz = <125000000>;
+            motorcomm,keep-pll-enabled;
+            motorcomm,auto-sleep-disabled;
 		};
 	};
 };
@@ -161,7 +169,6 @@
 };
 
 &usbphy { 
-	/* 绑定官方 DTS 里的 VBUS 电源 */
 	usb1_vbus-supply = <&reg_usb1_vbus>;
 	status = "okay"; 
 };

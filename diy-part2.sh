@@ -1,7 +1,6 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (After Update feeds)
+# Description: OpenWrt DIY script part 2 (Fix DTS Path Issue)
 
-# 定义文件名变量
 DTS_FILENAME="sun8i-t113-tronlong-minievm.dts"
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
@@ -11,30 +10,37 @@ echo "Starting DIY Part 2: Customizing for Tronlong TLT113-MiniEVM"
 echo "-------------------------------------------------------"
 
 # ==============================================================================
-# 1. 部署 DTS 文件 (Deploy Custom DTS)
+# 1. 强制注入 DTS 文件 (Force Inject via Kernel Files Overlay)
 # ==============================================================================
-echo "[1/2] Deploying Device Tree Source ($DTS_FILENAME)..."
+# 这里的路径 target/linux/sunxi/files/arch/arm/boot/dts/ 是 OpenWrt 的标准覆盖路径
+# 放在这里的文件会被强制复制到内核源码的 arch/arm/boot/dts/ 目录下
+KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
 
-# 确保目标目录存在
-if [ ! -d "target/linux/sunxi/dts" ]; then
-    echo "  -> Creating directory: target/linux/sunxi/dts"
-    mkdir -p target/linux/sunxi/dts
-fi
+echo "[1/2] Creating Kernel Files Overlay directory..."
+mkdir -p "$KERNEL_DTS_DIR"
 
-# 修正点：这里的路径改为相对路径 files/
-# 因为工作流已经把 files 文件夹移动到了当前目录 (openwrt/) 下
+echo "Deploying Device Tree Source ($DTS_FILENAME)..."
+# 注意：files/ 已经在工作流中被移动到了当前目录下
 if [ -f "files/$DTS_FILENAME" ]; then
+    # 策略 A: 复制到 Overlay 目录 (强制覆盖内核源码)
+    cp "files/$DTS_FILENAME" "$KERNEL_DTS_DIR/"
+    
+    # 策略 B: 同时复制到传统的 dts 目录 (以此作为备份，防止某些旧脚本依赖)
+    mkdir -p target/linux/sunxi/dts
     cp "files/$DTS_FILENAME" target/linux/sunxi/dts/
-    echo "  -> Success: DTS file copied to target/linux/sunxi/dts/"
+    
+    echo "  -> Success: DTS file deployed to:"
+    echo "     1. $KERNEL_DTS_DIR/"
+    echo "     2. target/linux/sunxi/dts/"
 else
     echo "  -> Error: Source DTS file not found in files/$DTS_FILENAME !"
-    echo "  -> Current directory: $(pwd)"
-    echo "  -> List files dir: $(ls -F files/ 2>/dev/null)"
+    echo "  -> Directory listing:"
+    ls -R files/
     exit 1
 fi
 
 # ==============================================================================
-# 2. 注入机型定义 (Inject Device Definition into Makefile)
+# 2. 注入机型定义 (Inject Device Definition)
 # ==============================================================================
 echo "[2/2] Injecting device definition into $TARGET_MK..."
 

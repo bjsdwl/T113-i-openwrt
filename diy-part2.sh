@@ -1,39 +1,27 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (After Update feeds)
+# Description: OpenWrt DIY script part 2
 
-# ==============================================================================
-# 1. 复制 DTS 文件 (关键修正：先创建目录)
-# ------------------------------------------------------------------------------
+# 1. 复制 DTS (注意文件名变了)
 echo "Creating DTS directory..."
-# ⚠️ 修正点：先确保目标目录存在，否则 cp 会失败
 mkdir -p target/linux/sunxi/dts
-
 echo "Copying custom DTS file..."
-# 确保源文件路径正确，并复制到刚才创建的目录
-if [ -f "$GITHUB_WORKSPACE/files/sun8i-t113-tronlong-evm.dts" ]; then
-    cp $GITHUB_WORKSPACE/files/sun8i-t113-tronlong-evm.dts target/linux/sunxi/dts/
-    echo "DTS file copied successfully."
-else
-    echo "ERROR: Source DTS file not found in $GITHUB_WORKSPACE/files/!"
-    exit 1
-fi
+# 这里的 source 文件名要和你仓库里的一致
+cp $GITHUB_WORKSPACE/files/sun8i-t113-tronlong-minievm.dts target/linux/sunxi/dts/
 
-# ==============================================================================
-# 2. 注入机型定义 (Inject Device Definition)
-# ------------------------------------------------------------------------------
-echo "Appending device definition to cortexa7.mk..."
+# 2. 注入机型定义
+echo "Appending device definition..."
 cat <<EOF >> target/linux/sunxi/image/cortexa7.mk
 
-define Device/tronlong_tlt113-evm
+define Device/tronlong_tlt113-minievm
   DEVICE_VENDOR := Tronlong
-  DEVICE_MODEL := TLT113-EVM
-  DEVICE_DTS := sun8i-t113-tronlong-evm
+  DEVICE_MODEL := TLT113-MiniEVM (NAND)
+  # 引用新的 DTS 文件名
+  DEVICE_DTS := sun8i-t113-tronlong-minievm
   DEVICE_UBOOT := sun8i-r528-qa-board
-  UBOOT_CONFIG_OVERRIDES := CONFIG_DRAM_CLK=792 CONFIG_DRAM_ZQ=8092667 CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong-evm"
-  SUPPORTED_DEVICES := tronlong,tlt113-evm
+  # 内存参数保持不变 (792MHz / 0x7b7bfb)
+  UBOOT_CONFIG_OVERRIDES := CONFIG_DRAM_CLK=792 CONFIG_DRAM_ZQ=8092667 CONFIG_DEFAULT_DEVICE_TREE="sun8i-t113-tronlong-minievm"
+  SUPPORTED_DEVICES := tronlong,tlt113-minievm
   \$(Device/sunxi-img)
 endef
-TARGET_DEVICES += tronlong_tlt113-evm
+TARGET_DEVICES += tronlong_tlt113-minievm
 EOF
-
-echo "DIY Script part 2 finished."

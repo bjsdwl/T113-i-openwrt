@@ -1,0 +1,176 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/dts-v1/;
+
+#include "sun8i-t113s.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/leds/common.h>
+
+/ {
+	model = "Tronlong TLT113-MiniEVM (NAND)";
+	compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113s", "allwinner,sun8i";
+
+	aliases {
+		serial0 = &uart0;
+		ethernet0 = &emac; /* 百兆 RMII */
+		ethernet1 = &usbether;
+		spi0 = &spi0;
+	};
+
+	chosen {
+		stdout-path = "serial0:115200n8";
+	};
+
+	/* 定义板载电源调节器 */
+	reg_usb1_vbus: usb1-vbus {
+		compatible = "regulator-fixed";
+		regulator-name = "usb1-vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-enable-ramp-delay = <1000>;
+		/* 官方 DTS: PB12 控制 USB 供电 */
+		gpio = <&pio 1 12 GPIO_ACTIVE_HIGH>; /* PB12 */
+		enable-active-high;
+		regulator-always-on;
+	};
+
+	leds {
+		compatible = "gpio-leds";
+		/* 核心板上的 LED (参考核心板手册 Page 9) */
+		led-0 {
+			function = LED_FUNCTION_STATUS;
+			color = <LED_COLOR_ID_GREEN>;
+			label = "tlt113:green:status";
+			gpios = <&pio 2 0 GPIO_ACTIVE_HIGH>; /* PC0 */
+			linux,default-trigger = "heartbeat";
+		};
+	};
+    
+	/* 禁用显示引擎 */
+	display_engine: display-engine { status = "disabled"; };
+};
+
+&pio {
+	/* 官方 DTS: UART0 使用 PG17, PG18 */
+	uart0_pg_pins: uart0-pg-pins {
+		pins = "PG17", "PG18";
+		function = "uart0";
+	};
+
+	/* 官方 DTS: GMAC0 使用 PE0-PE10 (RMII模式) */
+	emac_rmii_pins: emac-rmii-pins {
+		pins = "PE0", "PE1", "PE2", "PE3", "PE4",
+		       "PE5", "PE6", "PE7", "PE8", "PE9", "PE10";
+		function = "emac";
+		drive-strength = <40>;
+	};
+    
+	/* SPI0 (NAND) 引脚 */
+	spi0_pins: spi0-pins {
+		pins = "PC2", "PC4", "PC5", "PC6", "PC7"; /* CLK, MOSI, MISO, WP, HOLD */
+		function = "spi0";
+	};
+	spi0_cs0_pin: spi0-cs0-pin {
+		pins = "PC3";
+		function = "spi0";
+	};
+	
+	/* SD卡检测脚，通常 MiniEVM 也是 PF6，如不同请修改 */
+	mmc0_cd_pin: mmc0-cd-pin {
+		pins = "PF6";
+		function = "gpio_in";
+		bias-pull-up;
+	};
+};
+
+/* --- 调试串口 --- */
+&uart0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0_pg_pins>;
+	status = "okay";
+};
+
+/* --- SD卡 (启动用) --- */
+&mmc0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&mmc0_pins>;
+	vmmc-supply = <&reg_dcdc1>;
+	bus-width = <4>;
+	cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>;
+	status = "okay";
+};
+
+/* --- 禁用 eMMC --- */
+&mmc2 { status = "disabled"; };
+
+/* --- SPI NAND Flash --- */
+&spi0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&spi0_pins>, <&spi0_cs0_pin>;
+	status = "okay";
+
+	flash@0 {
+		compatible = "spi-nand";
+		reg = <0>;
+		spi-max-frequency = <40000000>;
+		
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			partition@0 {
+				label = "u-boot";
+				reg = <0x000000 0x200000>;
+				read-only;
+			};
+			partition@200000 {
+				label = "ubi";
+				reg = <0x200000 0xfe00000>;
+			};
+		};
+	};
+};
+
+/* --- 以太网 (ETH0 - RMII 100M) --- */
+/* 根据 MiniEVM 官方 DTS 适配 */
+&emac {
+	pinctrl-names = "default";
+	pinctrl-0 = <&emac_rmii_pins>;
+	phy-mode = "rmii"; 
+	phy-handle = <&ext_rmii_phy>;
+	status = "okay";
+
+	mdio {
+		compatible = "snps,dwmac-mdio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		/* PHY 地址通常为 1 (根据全志默认 RMII 设计) */
+		/* 如果不通，尝试改为 0 */
+		ext_rmii_phy: ethernet-phy@1 {
+			compatible = "ethernet-phy-ieee802.3-c22";
+			reg = <1>; 
+		};
+	};
+};
+
+/* --- USB --- */
+&usb_otg {
+	dr_mode = "host";
+	status = "okay";
+};
+
+&usbphy { 
+	/* 绑定官方 DTS 里的 VBUS 电源 */
+	usb1_vbus-supply = <&reg_usb1_vbus>;
+	status = "okay"; 
+};
+
+&ehci1 { status = "okay"; };
+&ohci1 { status = "okay"; };
+
+/* 禁用不需要的模块 */
+&ehci0 { status = "okay"; };
+&ohci0 { status = "okay"; };
+&tcon_tv0 { status = "disabled"; };
+&tcon_lcd0 { status = "disabled"; };

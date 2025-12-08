@@ -101,6 +101,23 @@
 		function = "gpio_in";
 		bias-pull-up;
 	};
+    /* UART2 引脚 (PE2, PE3) */
+    uart2_pe_pins: uart2-pe-pins {
+        pins = "PE2", "PE3";
+        function = "uart2";
+    };
+
+    /* UART4 引脚 (PB2, PB3) */
+    uart4_pb_pins: uart4-pb-pins {
+        pins = "PB2", "PB3";
+        function = "uart4";
+    };
+
+    /* UART5 引脚 (PE6, PE7) */
+    uart5_pe_pins: uart5-pe-pins {
+        pins = "PE6", "PE7";
+        function = "uart5";
+    };
 };
 
 /* --- 1. 显示引擎与 DSI 配置 --- */

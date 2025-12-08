@@ -1,7 +1,7 @@
 #!/bin/bash
 # Description: OpenWrt DIY script part 2 (After Update feeds)
 
-# 定义文件名变量，方便后续维护
+# 定义文件名变量
 DTS_FILENAME="sun8i-t113-tronlong-minievm.dts"
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
@@ -15,19 +15,21 @@ echo "-------------------------------------------------------"
 # ==============================================================================
 echo "[1/2] Deploying Device Tree Source ($DTS_FILENAME)..."
 
-# 确保目标目录存在 (防止 cp 报错)
+# 确保目标目录存在
 if [ ! -d "target/linux/sunxi/dts" ]; then
     echo "  -> Creating directory: target/linux/sunxi/dts"
     mkdir -p target/linux/sunxi/dts
 fi
 
-# 复制文件
-if [ -f "$GITHUB_WORKSPACE/files/$DTS_FILENAME" ]; then
-    cp "$GITHUB_WORKSPACE/files/$DTS_FILENAME" target/linux/sunxi/dts/
+# 修正点：这里的路径改为相对路径 files/
+# 因为工作流已经把 files 文件夹移动到了当前目录 (openwrt/) 下
+if [ -f "files/$DTS_FILENAME" ]; then
+    cp "files/$DTS_FILENAME" target/linux/sunxi/dts/
     echo "  -> Success: DTS file copied to target/linux/sunxi/dts/"
 else
-    echo "  -> Error: Source DTS file not found in $GITHUB_WORKSPACE/files/!"
-    echo "  -> Please verify your repository structure."
+    echo "  -> Error: Source DTS file not found in files/$DTS_FILENAME !"
+    echo "  -> Current directory: $(pwd)"
+    echo "  -> List files dir: $(ls -F files/ 2>/dev/null)"
     exit 1
 fi
 
@@ -36,17 +38,10 @@ fi
 # ==============================================================================
 echo "[2/2] Injecting device definition into $TARGET_MK..."
 
-# 检查目标 Makefile 是否存在
 if [ ! -f "$TARGET_MK" ]; then
     echo "  -> Error: Target Makefile $TARGET_MK not found!"
     exit 1
 fi
-
-# 追加机型配置
-# 关键点说明：
-# - DEVICE_UBOOT: 借用 sun8i-r528-qa-board 作为编译基础
-# - UBOOT_CONFIG_OVERRIDES: 覆盖 DRAM 参数 (CLK=792, ZQ=8092667)
-# - 注意：这里没有设置 cma=0，因为启用了 HDMI 需要预留显存 (256MB 内存足够)
 
 cat <<EOF >> "$TARGET_MK"
 

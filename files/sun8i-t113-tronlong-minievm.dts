@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
-// DTS 集成了：MiniEVM 电源 + 千兆 RGMII + NAND + USB + HDMI 显示
 /dts-v1/;
 
 #include "sun8i-t113s.dtsi"
@@ -22,21 +21,16 @@
 		stdout-path = "serial0:115200n8";
 	};
 
-	/* 定义 HDMI 物理接口 */
-	hdmi_connector: connector {
-		compatible = "hdmi-connector";
-		type = "a";
-		/* 关键：使用 I2C0 读取显示器的 EDID 信息 */
-		ddc-i2c-bus = <&i2c0>;
-
-		port {
-			hdmi_con_in: endpoint {
-				remote-endpoint = <&lt8912_out>;
-			};
-		};
+	/* 定义一个通用的 3.3V 电源，替代不存在的 DCDC1 */
+	reg_vcc3v3: vcc3v3 {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc3v3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
 	};
 
-	/* USB 供电 (MiniEVM PB12) */
+	/* 板载 USB VBUS 电源 (MiniEVM: PB12) */
 	reg_usb1_vbus: usb1-vbus {
 		compatible = "regulator-fixed";
 		regulator-name = "usb1-vbus";
@@ -46,6 +40,18 @@
 		gpio = <&pio 1 12 GPIO_ACTIVE_HIGH>; /* PB12 */
 		enable-active-high;
 		regulator-always-on;
+	};
+
+	/* HDMI 虚拟接口 */
+	hdmi_connector: connector {
+		compatible = "hdmi-connector";
+		type = "a";
+		ddc-i2c-bus = <&i2c0>;
+		port {
+			hdmi_con_in: endpoint {
+				remote-endpoint = <&lt8912_out>;
+			};
+		};
 	};
 
 	leds {
@@ -61,12 +67,25 @@
 };
 
 &pio {
+	/* 补全 MMC0 引脚定义: PF0-PF5 */
+	mmc0_pins: mmc0-pins {
+		pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
+		function = "mmc0";
+		drive-strength = <30>;
+		bias-pull-up;
+	};
+
+	mmc0_cd_pin: mmc0-cd-pin {
+		pins = "PF6";
+		function = "gpio_in";
+		bias-pull-up;
+	};
+
 	uart0_pg_pins: uart0-pg-pins {
 		pins = "PG17", "PG18";
 		function = "uart0";
 	};
 
-	/* 千兆 RGMII 引脚 */
 	emac_rgmii_pins: emac-rgmii-pins {
 		pins = "PG0", "PG1", "PG2", "PG3", "PG4", "PG5", "PG6",
 		       "PG7", "PG8", "PG9", "PG10", "PG12",
@@ -75,13 +94,11 @@
 		drive-strength = <40>;
 	};
     
-	/* I2C0 (PB10/11) 用于 HDMI EDID */
 	i2c0_pins: i2c0-pins {
 		pins = "PB10", "PB11";
 		function = "twi0";
 	};
 
-	/* I2C2 (PE12/13) 用于配置 LT8912B 芯片 */
 	i2c2_pins: i2c2-pins {
 		pins = "PE12", "PE13";
 		function = "twi2";
@@ -95,103 +112,7 @@
 		pins = "PC3";
 		function = "spi0";
 	};
-	
-	mmc0_cd_pin: mmc0-cd-pin {
-		pins = "PF6";
-		function = "gpio_in";
-		bias-pull-up;
-	};
-    /* UART2 引脚 (PE2, PE3) */
-    uart2_pe_pins: uart2-pe-pins {
-        pins = "PE2", "PE3";
-        function = "uart2";
-    };
-
-    /* UART4 引脚 (PB2, PB3) */
-    uart4_pb_pins: uart4-pb-pins {
-        pins = "PB2", "PB3";
-        function = "uart4";
-    };
-
-    /* UART5 引脚 (PE6, PE7) */
-    uart5_pe_pins: uart5-pe-pins {
-        pins = "PE6", "PE7";
-        function = "uart5";
-    };
 };
-
-/* --- 1. 显示引擎与 DSI 配置 --- */
-&display_engine {
-	status = "okay";
-};
-
-&tcon_lcd0 {
-	status = "okay";
-};
-
-&dsi {
-	status = "okay";
-	#address-cells = <1>;
-	#size-cells = <0>;
-
-	ports {
-		port@0 {
-			reg = <0>;
-			dsi_out_bridge: endpoint {
-				remote-endpoint = <&lt8912_in>;
-			};
-		};
-	};
-};
-
-&dphy {
-	status = "okay";
-};
-
-/* --- 2. I2C 配置 (LT8912B & EDID) --- */
-
-/* I2C0: 连接 HDMI 接口的 DDC 通道 (读取显示器参数) */
-&i2c0 {
-	status = "okay";
-	pinctrl-names = "default";
-	pinctrl-0 = <&i2c0_pins>;
-};
-
-/* I2C2: 连接 LT8912B 芯片本身 (控制芯片) */
-&i2c2 {
-	status = "okay";
-	pinctrl-names = "default";
-	pinctrl-0 = <&i2c2_pins>;
-	
-	lt8912@48 {
-		compatible = "lontium,lt8912b";
-		reg = <0x48>;
-		
-		/* 复位引脚: PE11 (原理图 Page 10) */
-		reset-gpios = <&pio 4 11 GPIO_ACTIVE_LOW>; 
-
-		ports {
-			#address-cells = <1>;
-			#size-cells = <0>;
-
-			port@0 {
-				reg = <0>;
-				lt8912_in: endpoint {
-					remote-endpoint = <&dsi_out_bridge>;
-				};
-			};
-
-			port@1 {
-				reg = <1>;
-				lt8912_out: endpoint {
-					remote-endpoint = <&hdmi_con_in>;
-				};
-			};
-		};
-	};
-};
-
-/* --- 3. 基础外设配置 (NAND/ETH/USB) --- */
 
 &uart0 {
 	pinctrl-names = "default";
@@ -202,12 +123,14 @@
 &mmc0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&mmc0_pins>;
-	vmmc-supply = <&reg_dcdc1>;
+	/* 修正：引用我们新建的 reg_vcc3v3 */
+	vmmc-supply = <&reg_vcc3v3>;
 	bus-width = <4>;
 	cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>;
 	status = "okay";
 };
 
+/* 禁用 eMMC */
 &mmc2 { status = "disabled"; };
 
 &spi0 {
@@ -235,7 +158,6 @@
 	};
 };
 
-/* 千兆 RGMII 配置 */
 &emac {
 	pinctrl-names = "default";
 	pinctrl-0 = <&emac_rgmii_pins>;
@@ -259,27 +181,60 @@
 	};
 };
 
+&i2c0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c0_pins>;
+};
+
+&i2c2 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c2_pins>;
+	lt8912@48 {
+		compatible = "lontium,lt8912b";
+		reg = <0x48>;
+		reset-gpios = <&pio 4 11 GPIO_ACTIVE_LOW>; 
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+			port@0 {
+				reg = <0>;
+				lt8912_in: endpoint {
+					remote-endpoint = <&dsi_out_bridge>;
+				};
+			};
+			port@1 {
+				reg = <1>;
+				lt8912_out: endpoint {
+					remote-endpoint = <&hdmi_con_in>;
+				};
+			};
+		};
+	};
+};
+
+&display_engine { status = "okay"; };
+&tcon_lcd0 { status = "okay"; };
+&dsi {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	ports {
+		port@0 {
+			reg = <0>;
+			dsi_out_bridge: endpoint {
+				remote-endpoint = <&lt8912_in>;
+			};
+		};
+	};
+};
+&dphy { status = "okay"; };
+
 &usb_otg { dr_mode = "host"; status = "okay"; };
 &usbphy { usb1_vbus-supply = <&reg_usb1_vbus>; status = "okay"; };
 &ehci1 { status = "okay"; };
 &ohci1 { status = "okay"; };
 &ehci0 { status = "okay"; };
 &ohci0 { status = "okay"; };
-
-&uart2 {
-    pinctrl-names = "default";
-    pinctrl-0 = <&uart2_pe_pins>;
-    status = "okay";
-};
-
-&uart4 {
-    pinctrl-names = "default";
-    pinctrl-0 = <&uart4_pb_pins>;
-    status = "okay";
-};
-
-&uart5 {
-    pinctrl-names = "default";
-    pinctrl-0 = <&uart5_pe_pins>;
-    status = "okay";
-};
+&tcon_tv0 { status = "disabled"; };

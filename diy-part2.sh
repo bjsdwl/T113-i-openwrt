@@ -1,40 +1,42 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (Fix DTS Path Issue)
+# Description: OpenWrt DIY script part 2 (Final Version for Tronlong T113)
 
-DTS_FILENAME="sun8i-t113-tronlong-minievm.dts"
+# 变量定义
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
+# OpenWrt 内核源码覆盖路径 (Kernel Overlay)
+KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
 
 echo "-------------------------------------------------------"
 echo "Starting DIY Part 2: Customizing for Tronlong TLT113-MiniEVM"
 echo "-------------------------------------------------------"
 
 # ==============================================================================
-# 1. 强制注入 DTS 文件 (Force Inject via Kernel Files Overlay)
+# 1. 部署所有 DTS/DTSI 文件 (Deploy All Device Tree Files)
 # ==============================================================================
-# 这里的路径 target/linux/sunxi/files/arch/arm/boot/dts/ 是 OpenWrt 的标准覆盖路径
-# 放在这里的文件会被强制复制到内核源码的 arch/arm/boot/dts/ 目录下
-KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
+echo "[1/2] Deploying Device Tree Files..."
 
-echo "[1/2] Creating Kernel Files Overlay directory..."
+# 创建必要的目录
 mkdir -p "$KERNEL_DTS_DIR"
+mkdir -p target/linux/sunxi/dts
 
-echo "Deploying Device Tree Source ($DTS_FILENAME)..."
-# 注意：files/ 已经在工作流中被移动到了当前目录下
-if [ -f "files/$DTS_FILENAME" ]; then
-    # 策略 A: 复制到 Overlay 目录 (强制覆盖内核源码)
+# 检查 files 目录下是否有 dts 或 dtsi 文件
+# 注意：files/ 目录已经在工作流中被移动到了当前目录下
+if ls files/*.dts* 1> /dev/null 2>&1; then
+    echo "  -> Found DTS files. Copying..."
+    
+    # 策略 A: 复制到 Kernel Overlay (强制覆盖内核源码，解决找不到依赖的问题)
+    cp files/*.dts* "$KERNEL_DTS_DIR/"
+    echo "     Copied to $KERNEL_DTS_DIR/"
+    
+    # 策略 B: 同时复制到 OpenWrt 标准 DTS 目录 (作为备份)
     cp files/*.dts* target/linux/sunxi/dts/
+    echo "     Copied to target/linux/sunxi/dts/"
     
-    # 策略 B: 同时复制到传统的 dts 目录 (以此作为备份，防止某些旧脚本依赖)
-    mkdir -p target/linux/sunxi/dts
-    cp "files/$DTS_FILENAME" target/linux/sunxi/dts/
-    
-    echo "  -> Success: DTS file deployed to:"
-    echo "     1. $KERNEL_DTS_DIR/"
-    echo "     2. target/linux/sunxi/dts/"
+    echo "  -> Success: Device Tree files deployed."
 else
-    echo "  -> Error: Source DTS file not found in files/$DTS_FILENAME !"
-    echo "  -> Directory listing:"
+    echo "  -> Error: No .dts or .dtsi files found in files/ directory!"
+    echo "  -> Listing files/ content:"
     ls -R files/
     exit 1
 fi
@@ -44,11 +46,13 @@ fi
 # ==============================================================================
 echo "[2/2] Injecting device definition into $TARGET_MK..."
 
+# 检查目标 Makefile 是否存在
 if [ ! -f "$TARGET_MK" ]; then
     echo "  -> Error: Target Makefile $TARGET_MK not found!"
     exit 1
 fi
 
+# 追加机型配置到 Makefile 末尾
 cat <<EOF >> "$TARGET_MK"
 
 # --- Added by DIY Script for Tronlong TLT113-MiniEVM ---

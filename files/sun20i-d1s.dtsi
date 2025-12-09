@@ -2,6 +2,17 @@
 
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/dma/sun4i-a10.h>
+/* 必须包含时钟头文件以获取 CLK_BUS_UART0 等定义 */
+#include <dt-bindings/clock/sun20i-d1-ccu.h>
+#include <dt-bindings/reset/sun20i-d1-ccu.h>
+
+/* 
+ * 补丁：手动定义缺失的时钟索引
+ * 在 D1/T113 CCU 驱动中，APB1 的索引通常是 13
+ */
+#ifndef CLK_APB1
+#define CLK_APB1 13
+#endif
 
 / {
 	osc24M: osc24M_clk {
@@ -9,6 +20,14 @@
 		compatible = "fixed-clock";
 		clock-frequency = <24000000>;
 		clock-output-names = "osc24M";
+	};
+
+	/* 添加 32k 低速时钟节点 */
+	osc32k: osc32k_clk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <32768>;
+		clock-output-names = "osc32k";
 	};
 
 	soc {
@@ -21,7 +40,8 @@
 				     <GIC_SPI 16 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 17 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 18 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&ccu CLK_APB1>, <&osc24M>, <&ccu CLK_LOSC>;
+			/* 修正：使用 &osc32k 代替 &ccu CLK_LOSC */
+			clocks = <&ccu CLK_APB1>, <&osc24M>, <&osc32k>;
 			clock-names = "apb", "hosc", "losc";
 			gpio-controller;
 			#gpio-cells = <3>;
@@ -32,7 +52,8 @@
 		ccu: clock-controller@2001000 {
 			compatible = "allwinner,sun20i-d1-ccu";
 			reg = <0x02001000 0x1000>;
-			clocks = <&osc24M>, <&ccu CLK_LOSC>;
+			/* 修正：CCU 输入源 */
+			clocks = <&osc24M>, <&osc32k>;
 			clock-names = "hosc", "losc";
 			#clock-cells = <1>;
 			#reset-cells = <1>;
@@ -49,7 +70,6 @@
 			status = "disabled";
 		};
 
-		/* 增加其他串口供以后使用 */
 		uart2: serial@2500800 {
 			compatible = "snps,dw-apb-uart";
 			reg = <0x02500800 0x400>;
@@ -228,13 +248,12 @@
 			status = "disabled";
 		};
 
-		/* 显示引擎与 TCON */
 		display_engine: display-engine {
 			compatible = "allwinner,sun20i-d1-de2e";
-			reg = <0x05000000 0x10000>, /* blender */
-			      <0x05100000 0x10000>, /* ui */
-			      <0x05200000 0x10000>, /* top */
-			      <0x05300000 0x10000>; /* scaler */
+			reg = <0x05000000 0x10000>,
+			      <0x05100000 0x10000>,
+			      <0x05200000 0x10000>,
+			      <0x05300000 0x10000>;
 			reg-names = "blender", "ui", "top", "scaler";
 			clocks = <&ccu CLK_BUS_DE>, <&ccu CLK_DE>;
 			clock-names = "bus", "mod";

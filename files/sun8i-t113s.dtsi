@@ -4,8 +4,9 @@
  */
 
 #include <dt-bindings/interrupt-controller/arm-gic.h>
-#include <dt-bindings/clock/sun8i-t113-ccu.h>
-#include <dt-bindings/reset/sun8i-t113-ccu.h>
+/* 修正：使用内核自带的 D1 (sun20i) 时钟和复位定义 */
+#include <dt-bindings/clock/sun20i-d1-ccu.h>
+#include <dt-bindings/reset/sun20i-d1-ccu.h>
 
 / {
 	#address-cells = <1>;
@@ -20,16 +21,50 @@
 			compatible = "arm,cortex-a7";
 			device_type = "cpu";
 			reg = <0>;
-			clocks = <&ccu CLK_CPU>;
+			/* 修正：使用 D1 定义的 CLK_CPUX */
+			clocks = <&ccu CLK_CPUX>;
 			clock-names = "cpu";
+			operating-points-v2 = <&cpu_opp_table>;
 		};
 
 		cpu1: cpu@1 {
 			compatible = "arm,cortex-a7";
 			device_type = "cpu";
 			reg = <1>;
-			clocks = <&ccu CLK_CPU>;
+			/* 修正：使用 D1 定义的 CLK_CPUX */
+			clocks = <&ccu CLK_CPUX>;
 			clock-names = "cpu";
+			operating-points-v2 = <&cpu_opp_table>;
+		};
+	};
+
+	cpu_opp_table: opp-table-cpu {
+		compatible = "operating-points-v2";
+		opp-shared;
+
+		opp-408000000 {
+			opp-hz = /bits/ 64 <408000000>;
+			opp-microvolt = <900000>;
+		};
+
+		opp-600000000 {
+			opp-hz = /bits/ 64 <600000000>;
+			opp-microvolt = <900000>;
+		};
+
+		opp-816000000 {
+			opp-hz = /bits/ 64 <816000000>;
+			opp-microvolt = <900000>;
+		};
+
+		opp-1008000000 {
+			opp-hz = /bits/ 64 <1008000000>;
+			opp-microvolt = <950000>;
+		};
+
+		opp-1200000000 {
+			opp-hz = /bits/ 64 <1200000000>;
+			opp-microvolt = <1000000>;
 		};
 	};
 
@@ -67,5 +102,5 @@
 	};
 };
 
-/* 关键：引用外设定义文件 */
+/* 引用 D1s 外设定义 */
 #include "sun20i-d1s.dtsi"

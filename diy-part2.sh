@@ -23,7 +23,7 @@ echo "Deploying Device Tree Source ($DTS_FILENAME)..."
 # 注意：files/ 已经在工作流中被移动到了当前目录下
 if [ -f "files/$DTS_FILENAME" ]; then
     # 策略 A: 复制到 Overlay 目录 (强制覆盖内核源码)
-    cp "files/$DTS_FILENAME" "$KERNEL_DTS_DIR/"
+    cp files/*.dts* target/linux/sunxi/dts/
     
     # 策略 B: 同时复制到传统的 dts 目录 (以此作为备份，防止某些旧脚本依赖)
     mkdir -p target/linux/sunxi/dts

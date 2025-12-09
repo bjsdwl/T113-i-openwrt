@@ -1,84 +1,9 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 
-/* 
- * ⚠️ 终极修正：手动定义所有必要的宏
- * 不再依赖任何外部头文件，确保 DTC 编译 100% 通过
- */
-
-/* GIC 中断类型 (参考 include/dt-bindings/interrupt-controller/arm-gic.h) */
-#ifndef GIC_SPI
-#define GIC_SPI 0
-#endif
-#ifndef GIC_PPI
-#define GIC_PPI 1
-#endif
-#ifndef IRQ_TYPE_LEVEL_HIGH
-#define IRQ_TYPE_LEVEL_HIGH 4
-#endif
-#ifndef IRQ_TYPE_LEVEL_LOW
-#define IRQ_TYPE_LEVEL_LOW 8
-#endif
-
-/* 时钟与复位 (参考 include/dt-bindings/clock/sun20i-d1-ccu.h) */
-#ifndef CLK_APB1
-#define CLK_APB1 13
-#endif
-#ifndef CLK_LOSC
-#define CLK_LOSC 0
-#endif
-
-/* 以下宏根据 D1 内核源码补全 */
-#define CLK_BUS_UART0 18
-#define CLK_BUS_UART2 20
-#define CLK_BUS_UART4 22
-#define CLK_BUS_UART5 23
-#define CLK_BUS_I2C0  24
-#define CLK_BUS_I2C2  26
-#define CLK_BUS_SPI0  30
-#define CLK_BUS_EMAC  33
-#define CLK_BUS_MMC0  37
-#define CLK_BUS_MMC2  39
-#define CLK_BUS_OHCI0 43
-#define CLK_BUS_OHCI1 44
-#define CLK_BUS_EHCI0 45
-#define CLK_BUS_EHCI1 46
-#define CLK_BUS_LRADC 54
-#define CLK_BUS_TCON_LCD0 61
-#define CLK_BUS_DE    57
-#define CLK_BUS_MIPI_DSI 60
-
-#define CLK_SPI0 83
-#define CLK_MMC0 86
-#define CLK_MMC2 88
-#define CLK_USB_OHCI0 102
-#define CLK_USB_OHCI1 103
-#define CLK_USB_PHY0  100
-#define CLK_USB_PHY1  101
-#define CLK_DE 108
-#define CLK_TCON_LCD0 111
-#define CLK_MIPI_DSI 117
-
-#define RST_BUS_UART0 4
-#define RST_BUS_UART2 6
-#define RST_BUS_UART4 8
-#define RST_BUS_UART5 9
-#define RST_BUS_I2C0  10
-#define RST_BUS_I2C2  12
-#define RST_BUS_SPI0  16
-#define RST_BUS_EMAC  19
-#define RST_BUS_MMC0  23
-#define RST_BUS_MMC2  25
-#define RST_BUS_OHCI0 29
-#define RST_BUS_OHCI1 30
-#define RST_BUS_EHCI0 31
-#define RST_BUS_EHCI1 32
-#define RST_BUS_LRADC 40
-#define RST_BUS_TCON_LCD0 47
-#define RST_BUS_DE    43
-#define RST_BUS_LVDS0 48
-#define RST_BUS_MIPI_DSI 50
-#define RST_USB_PHY0  52
-#define RST_USB_PHY1  53
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/dma/sun4i-a10.h>
+#include <dt-bindings/clock/sun20i-d1-ccu.h>
+#include <dt-bindings/reset/sun20i-d1-ccu.h>
 
 / {
 	osc24M: osc24M_clk {
@@ -122,6 +47,7 @@
 			#reset-cells = <1>;
 		};
 
+		/* 基础外设控制器定义 */
 		uart0: serial@2500000 {
 			compatible = "snps,dw-apb-uart";
 			reg = <0x02500000 0x400>;

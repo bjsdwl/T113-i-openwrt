@@ -18,82 +18,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y device-tree-compiler gcc
 
-      - name: Setup Mock Environment
+      - name: Setup Environment
         run: |
-          echo "Setting up fake include directories..."
+          # 只需要把文件拿出来
           cp files/* .
           
-          mkdir -p include/dt-bindings/interrupt-controller
-          mkdir -p include/dt-bindings/clock
-          mkdir -p include/dt-bindings/reset
-          mkdir -p include/dt-bindings/dma
+          # 创建 GPIO 和 LED 的简单定义（这两个通常在 board dts 引用）
           mkdir -p include/dt-bindings/gpio
           mkdir -p include/dt-bindings/leds
           
-          # ---------------------------------------------------------
-          # [关键修正] 
-          # 1. 创建 irq.h
-          # 2. 让 arm-gic.h 显式包含 irq.h (模拟真实内核行为)
-          # ---------------------------------------------------------
-          
-          # 1. 定义 IRQ 类型
-          echo "#define IRQ_TYPE_NONE 0" > include/dt-bindings/interrupt-controller/irq.h
-          echo "#define IRQ_TYPE_EDGE_RISING 1" >> include/dt-bindings/interrupt-controller/irq.h
-          echo "#define IRQ_TYPE_EDGE_FALLING 2" >> include/dt-bindings/interrupt-controller/irq.h
-          echo "#define IRQ_TYPE_EDGE_BOTH (IRQ_TYPE_EDGE_FALLING | IRQ_TYPE_EDGE_RISING)" >> include/dt-bindings/interrupt-controller/irq.h
-          echo "#define IRQ_TYPE_LEVEL_HIGH 4" >> include/dt-bindings/interrupt-controller/irq.h
-          echo "#define IRQ_TYPE_LEVEL_LOW 8" >> include/dt-bindings/interrupt-controller/irq.h
-          
-          # 2. 定义 GIC 并引用上面的 IRQ (关键！)
-          echo "#include <dt-bindings/interrupt-controller/irq.h>" > include/dt-bindings/interrupt-controller/arm-gic.h
-          echo "#define GIC_SPI 0" >> include/dt-bindings/interrupt-controller/arm-gic.h
-          echo "#define GIC_PPI 1" >> include/dt-bindings/interrupt-controller/arm-gic.h
-          
-          # ---------------------------------------------------------
-          # 其他模拟文件 (保持不变)
-          # ---------------------------------------------------------
-          
-          # 时钟
-          echo "#define CLK_CPUX 0" > include/dt-bindings/clock/sun20i-d1-ccu.h
-          echo "#define CLK_APB1 13" >> include/dt-bindings/clock/sun20i-d1-ccu.h
-          echo "#define CLK_LOSC 0" >> include/dt-bindings/clock/sun20i-d1-ccu.h
-          # 补充总线时钟定义 (暴力补全，防止 sun20i-d1s.dtsi 报错)
-          for i in UART0 UART2 UART4 UART5 I2C0 I2C2 SPI0 EMAC MMC0 MMC2 OHCI0 OHCI1 EHCI0 EHCI1 LRADC TCON_LCD0 DE MIPI_DSI; do
-            echo "#define CLK_BUS_$i 0" >> include/dt-bindings/clock/sun20i-d1-ccu.h
-          done
-          # 补充模块时钟定义
-          for i in SPI0 MMC0 MMC2 USB_OHCI0 USB_OHCI1 USB_PHY0 USB_PHY1 DE TCON_LCD0 MIPI_DSI; do
-            echo "#define CLK_$i 0" >> include/dt-bindings/clock/sun20i-d1-ccu.h
-          done
-          
-          # 复位
-          echo "#define RST_BUS_UART0 0" > include/dt-bindings/reset/sun20i-d1-ccu.h
-          # 补充所有复位定义
-          for i in UART0 UART2 UART4 UART5 I2C0 I2C2 SPI0 EMAC MMC0 MMC2 OHCI0 OHCI1 EHCI0 EHCI1 LRADC TCON_LCD0 DE LVDS0 MIPI_DSI USB_PHY0 USB_PHY1; do
-            echo "#define RST_BUS_$i 0" >> include/dt-bindings/reset/sun20i-d1-ccu.h
-          done
-          
-          # GPIO & LED
           echo "#define GPIO_ACTIVE_HIGH 0" > include/dt-bindings/gpio/gpio.h
           echo "#define GPIO_ACTIVE_LOW 1" >> include/dt-bindings/gpio/gpio.h
           echo "#define LED_COLOR_ID_GREEN 2" > include/dt-bindings/leds/common.h
           echo "#define LED_FUNCTION_STATUS \"status\"" >> include/dt-bindings/leds/common.h
-          echo "#define LED_FUNCTION_ACTIVITY \"activity\"" >> include/dt-bindings/leds/common.h
-          
-          # DMA
-          touch include/dt-bindings/dma/sun4i-a10.h
 
       - name: Run Syntax Check
         run: |
           echo "Processing DTS..."
-          # 预处理 (-undef 防止干扰, -D__DTS__ 模拟内核环境)
-          if ! cpp -nostdinc -I include -undef -D__DTS__ -x assembler-with-cpp sun8i-t113-tronlong-minievm.dts > temp.dts; then
+          # 预处理：现在文件自带宏定义，不需要依赖假头文件了
+          if ! cpp -nostdinc -I include -undef -x assembler-with-cpp sun8i-t113-tronlong-minievm.dts > temp.dts; then
             echo "❌ CPP Pre-processing failed!"
             exit 1
           fi
           
           echo "Compiling DTS..."
-          # 编译检查 (-Wno... 忽略所有非致命警告)
           if ! dtc -I dts -O dtb -o test.dtb -Wno-unit_address_vs_reg -Wno-simple_bus_reg -Wno-graph_child_address temp.dts; then
             echo "❌ DTC Syntax Error found!"
             exit 1

@@ -21,7 +21,7 @@ jobs:
       - name: Setup Mock Environment
         run: |
           echo "Setting up fake include directories..."
-          # 1. 把 files 里的 dts/dtsi 拿出来
+          # 1. 复制文件
           cp files/* .
           
           # 2. 创建目录结构
@@ -29,22 +29,24 @@ jobs:
           mkdir -p include/dt-bindings/clock
           mkdir -p include/dt-bindings/reset
           mkdir -p include/dt-bindings/dma
-          mkdir -p include/dt-bindings/gpio  # <--- 新增
-          mkdir -p include/dt-bindings/leds  # <--- 新增
+          mkdir -p include/dt-bindings/gpio
+          mkdir -p include/dt-bindings/leds
           
-          # 3. 创建空文件（骗过预处理器）
+          # 3. 创建空文件（通用）
           touch include/dt-bindings/interrupt-controller/arm-gic.h
           touch include/dt-bindings/interrupt-controller/irq.h
           touch include/dt-bindings/dma/sun4i-a10.h
-          touch include/dt-bindings/clock/sun20i-d1-ccu.h
           touch include/dt-bindings/reset/sun20i-d1-ccu.h
           
-          # 4. 创建带内容的伪造头文件（防止报 Undefined Symbol 错误）
-          # GPIO 定义
+          # 4. [关键修正] 注入时钟宏定义
+          # 既然 DTS 引用了这个文件，我们就往里面写点假数据，让它编译通过
+          echo "#define CLK_CPUX 0" > include/dt-bindings/clock/sun20i-d1-ccu.h
+          echo "#define CLK_APB1 13" >> include/dt-bindings/clock/sun20i-d1-ccu.h
+          echo "#define CLK_LOSC 0" >> include/dt-bindings/clock/sun20i-d1-ccu.h
+          
+          # 5. 注入 GPIO 和 LED 定义
           echo "#define GPIO_ACTIVE_HIGH 0" > include/dt-bindings/gpio/gpio.h
           echo "#define GPIO_ACTIVE_LOW 1" >> include/dt-bindings/gpio/gpio.h
-          
-          # LED 定义
           echo "#define LED_COLOR_ID_GREEN 2" > include/dt-bindings/leds/common.h
           echo "#define LED_FUNCTION_STATUS \"status\"" >> include/dt-bindings/leds/common.h
           echo "#define LED_FUNCTION_ACTIVITY \"activity\"" >> include/dt-bindings/leds/common.h
@@ -52,14 +54,14 @@ jobs:
       - name: Run Syntax Check
         run: |
           echo "Processing DTS..."
-          # 使用 cpp 预处理，指定 include 目录
+          # 预处理：将宏展开为数字
           if ! cpp -nostdinc -I include -undef -x assembler-with-cpp sun8i-t113-tronlong-minievm.dts > temp.dts; then
             echo "❌ CPP Pre-processing failed!"
             exit 1
           fi
           
           echo "Compiling DTS..."
-          # 尝试编译
+          # 编译检查
           if ! dtc -I dts -O dtb -o test.dtb temp.dts; then
             echo "❌ DTC Syntax Error found!"
             exit 1

@@ -10,7 +10,7 @@
 	aliases {
 		serial0 = &uart0;
 		ethernet0 = &emac;
-		ethernet1 = &usbether;
+		/* 删除不存在的 usbether 引用 */
 		spi0 = &spi0;
 	};
 
@@ -52,10 +52,8 @@
 	leds {
 		compatible = "gpio-leds";
 		led-0 {
-			/* FUNCTION_STATUS="status" */
 			function = "status";
-			/* COLOR_ID_GREEN=2 */
-			color = <2>;
+			color = <2>; /* GREEN */
 			label = "tlt113:green:status";
 			/* PC0: Port 2, Pin 0, Active High=0 */
 			gpios = <&pio 2 0 0>;

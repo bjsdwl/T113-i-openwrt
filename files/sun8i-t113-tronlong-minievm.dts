@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /dts-v1/;
 
+/* 引用 CPU 定义 (sun8i-t113s.dtsi) */
 #include "sun8i-t113s.dtsi"
 
 /* 
- * ⚠️ 手动定义必要的宏，不再引用外部头文件 
- * 确保 DTC 编译绝对通过
+ * 宏定义：GPIO & LED
+ * 手动定义以避免头文件依赖
  */
 #ifndef GPIO_ACTIVE_HIGH
 #define GPIO_ACTIVE_HIGH 0

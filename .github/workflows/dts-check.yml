@@ -21,10 +21,9 @@ jobs:
       - name: Setup Mock Environment
         run: |
           echo "Setting up fake include directories..."
-          # 1. 复制文件
           cp files/* .
           
-          # 2. 创建目录结构
+          # 创建目录结构
           mkdir -p include/dt-bindings/interrupt-controller
           mkdir -p include/dt-bindings/clock
           mkdir -p include/dt-bindings/reset
@@ -32,37 +31,51 @@ jobs:
           mkdir -p include/dt-bindings/gpio
           mkdir -p include/dt-bindings/leds
           
-          # 3. 创建空文件（通用）
-          touch include/dt-bindings/interrupt-controller/arm-gic.h
-          touch include/dt-bindings/interrupt-controller/irq.h
-          touch include/dt-bindings/dma/sun4i-a10.h
-          touch include/dt-bindings/reset/sun20i-d1-ccu.h
+          # ---------------------------------------------------------
+          # [关键修正] 填充头文件内容 (Populate Header Files)
+          # ---------------------------------------------------------
           
-          # 4. [关键修正] 注入时钟宏定义
-          # 既然 DTS 引用了这个文件，我们就往里面写点假数据，让它编译通过
+          # 1. 中断定义 (GIC/IRQ) - 解决 line 83 error
+          echo "#define GIC_SPI 0" > include/dt-bindings/interrupt-controller/arm-gic.h
+          echo "#define GIC_PPI 1" >> include/dt-bindings/interrupt-controller/arm-gic.h
+          echo "#define IRQ_TYPE_None 0" > include/dt-bindings/interrupt-controller/irq.h
+          echo "#define IRQ_TYPE_LEVEL_HIGH 4" >> include/dt-bindings/interrupt-controller/irq.h
+          echo "#define IRQ_TYPE_LEVEL_LOW 8" >> include/dt-bindings/interrupt-controller/irq.h
+          
+          # 2. 时钟定义 (CCU) - 解决之前的 CLK error
           echo "#define CLK_CPUX 0" > include/dt-bindings/clock/sun20i-d1-ccu.h
           echo "#define CLK_APB1 13" >> include/dt-bindings/clock/sun20i-d1-ccu.h
           echo "#define CLK_LOSC 0" >> include/dt-bindings/clock/sun20i-d1-ccu.h
+          # 补充其他可能用到的总线时钟 (防止 sun20i-d1s.dtsi 报错)
+          echo "#define CLK_BUS_UART0 0" >> include/dt-bindings/clock/sun20i-d1-ccu.h
+          echo "#define CLK_BUS_I2C0 0" >> include/dt-bindings/clock/sun20i-d1-ccu.h
+          echo "#define CLK_BUS_SPI0 0" >> include/dt-bindings/clock/sun20i-d1-ccu.h
           
-          # 5. 注入 GPIO 和 LED 定义
+          # 3. 复位定义 (RST)
+          echo "#define RST_BUS_UART0 0" > include/dt-bindings/reset/sun20i-d1-ccu.h
+          
+          # 4. GPIO 和 LED
           echo "#define GPIO_ACTIVE_HIGH 0" > include/dt-bindings/gpio/gpio.h
           echo "#define GPIO_ACTIVE_LOW 1" >> include/dt-bindings/gpio/gpio.h
           echo "#define LED_COLOR_ID_GREEN 2" > include/dt-bindings/leds/common.h
           echo "#define LED_FUNCTION_STATUS \"status\"" >> include/dt-bindings/leds/common.h
           echo "#define LED_FUNCTION_ACTIVITY \"activity\"" >> include/dt-bindings/leds/common.h
+          
+          # 5. DMA (空定义即可)
+          touch include/dt-bindings/dma/sun4i-a10.h
 
       - name: Run Syntax Check
         run: |
           echo "Processing DTS..."
-          # 预处理：将宏展开为数字
+          # 预处理
           if ! cpp -nostdinc -I include -undef -x assembler-with-cpp sun8i-t113-tronlong-minievm.dts > temp.dts; then
             echo "❌ CPP Pre-processing failed!"
             exit 1
           fi
           
           echo "Compiling DTS..."
-          # 编译检查
-          if ! dtc -I dts -O dtb -o test.dtb temp.dts; then
+          # 编译检查 (-Wno-graph_child_address 忽略一些非致命警告)
+          if ! dtc -I dts -O dtb -o test.dtb -Wno-graph_child_address temp.dts; then
             echo "❌ DTC Syntax Error found!"
             exit 1
           fi

@@ -237,4 +237,4 @@
 &ohci1 { status = "okay"; };
 &ehci0 { status = "okay"; };
 &ohci0 { status = "okay"; };
-&tcon_tv0 { status = "disabled"; };
+/* &tcon_tv0 { status = "disabled"; }; */

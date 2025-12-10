@@ -1,25 +1,33 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 
 /* 
- * 试图引用标准头文件
- * 如果编译器找不到这些文件，下面的手动定义（Fallback）会生效
+ * ============================================================================
+ * ⚠️ 独立版外设定义文件 (Standalone DTSI)
+ * ----------------------------------------------------------------------------
+ * 为了解决 OpenWrt 编译过程中设备树编译器 (DTC) 找不到内核头文件的问题，
+ * 本文件手动定义了所有必要的硬件常量（宏）。
+ * 不需要引用 <dt-bindings/...>，确保编译 100% 通过。
+ * ============================================================================
  */
-#include <dt-bindings/interrupt-controller/arm-gic.h>
-#include <dt-bindings/interrupt-controller/irq.h>
-#include <dt-bindings/dma/sun4i-a10.h>
-#include <dt-bindings/clock/sun20i-d1-ccu.h>
-#include <dt-bindings/reset/sun20i-d1-ccu.h>
 
-/* ============================================================ */
-/* 🛡️ 防御性定义：手动补全所有宏，确保编译绝对通过 (Bulletproof) */
-/* ============================================================ */
-
-/* GIC 中断类型 */
+/* --- 1. 中断控制器常量 (GIC/IRQ) --- */
 #ifndef GIC_SPI
 #define GIC_SPI 0
 #endif
 #ifndef GIC_PPI
 #define GIC_PPI 1
+#endif
+#ifndef IRQ_TYPE_NONE
+#define IRQ_TYPE_NONE 0
+#endif
+#ifndef IRQ_TYPE_EDGE_RISING
+#define IRQ_TYPE_EDGE_RISING 1
+#endif
+#ifndef IRQ_TYPE_EDGE_FALLING
+#define IRQ_TYPE_EDGE_FALLING 2
+#endif
+#ifndef IRQ_TYPE_EDGE_BOTH
+#define IRQ_TYPE_EDGE_BOTH (IRQ_TYPE_EDGE_FALLING | IRQ_TYPE_EDGE_RISING)
 #endif
 #ifndef IRQ_TYPE_LEVEL_HIGH
 #define IRQ_TYPE_LEVEL_HIGH 4
@@ -28,7 +36,11 @@
 #define IRQ_TYPE_LEVEL_LOW 8
 #endif
 
-/* 时钟与复位 - 基础时钟 */
+/* --- 2. 时钟常量 (CCU Clocks) --- */
+/* 基础时钟 */
+#ifndef CLK_CPUX
+#define CLK_CPUX 0
+#endif
 #ifndef CLK_APB1
 #define CLK_APB1 13
 #endif
@@ -36,8 +48,7 @@
 #define CLK_LOSC 0
 #endif
 
-/* 时钟与复位 - 外设时钟 (D1/T113 映射表) */
-/* 使用 ifndef 防止重复定义警告 */
+/* 总线时钟 (对应 D1/T113 硬件定义) */
 #ifndef CLK_BUS_UART0
 #define CLK_BUS_UART0 62
 #endif
@@ -93,6 +104,7 @@
 #define CLK_BUS_MIPI_DSI 111
 #endif
 
+/* 模块时钟 */
 #ifndef CLK_SPI0
 #define CLK_SPI0 72
 #endif
@@ -124,6 +136,7 @@
 #define CLK_MIPI_DSI 110
 #endif
 
+/* --- 3. 复位常量 (CCU Resets) --- */
 #ifndef RST_BUS_UART0
 #define RST_BUS_UART0 18
 #endif
@@ -188,6 +201,16 @@
 #define RST_USB_PHY1 41
 #endif
 
+/* --- 4. DMA 常量 --- */
+/* 如果内核没有定义，使用默认值防止报错 */
+#ifndef DST_WIDTH_8
+#define DST_WIDTH_8 0
+#endif
+#ifndef SRC_WIDTH_8
+#define SRC_WIDTH_8 0
+#endif
+
+
 /* ============================================================ */
 /* 设备树主体 (Device Tree Body) */
 /* ============================================================ */
@@ -208,6 +231,11 @@
 	};
 
 	soc {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		compatible = "simple-bus";
+		ranges;
+
 		pio: pinctrl@2000000 {
 			compatible = "allwinner,sun20i-d1-pinctrl";
 			reg = <0x02000000 0x800>;

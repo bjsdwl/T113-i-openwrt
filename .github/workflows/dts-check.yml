@@ -3,7 +3,7 @@ name: Fast DTS Syntax Check
 on:
   push:
     paths:
-      - 'files/**'  # 只有当 files 目录下的文件变化时才触发
+      - 'files/**'
   workflow_dispatch:
 
 jobs:
@@ -20,30 +20,49 @@ jobs:
 
       - name: Setup Mock Environment
         run: |
-          # 把 files 目录下的文件移出来方便操作
+          echo "Setting up fake include directories..."
+          # 1. 把 files 里的 dts/dtsi 拿出来
           cp files/* .
           
-          # 创建假头文件目录结构，骗过预处理器
+          # 2. 创建目录结构
           mkdir -p include/dt-bindings/interrupt-controller
           mkdir -p include/dt-bindings/clock
           mkdir -p include/dt-bindings/reset
           mkdir -p include/dt-bindings/dma
+          mkdir -p include/dt-bindings/gpio  # <--- 新增
+          mkdir -p include/dt-bindings/leds  # <--- 新增
           
-          # 创建空文件
+          # 3. 创建空文件（骗过预处理器）
           touch include/dt-bindings/interrupt-controller/arm-gic.h
           touch include/dt-bindings/interrupt-controller/irq.h
           touch include/dt-bindings/dma/sun4i-a10.h
           touch include/dt-bindings/clock/sun20i-d1-ccu.h
           touch include/dt-bindings/reset/sun20i-d1-ccu.h
+          
+          # 4. 创建带内容的伪造头文件（防止报 Undefined Symbol 错误）
+          # GPIO 定义
+          echo "#define GPIO_ACTIVE_HIGH 0" > include/dt-bindings/gpio/gpio.h
+          echo "#define GPIO_ACTIVE_LOW 1" >> include/dt-bindings/gpio/gpio.h
+          
+          # LED 定义
+          echo "#define LED_COLOR_ID_GREEN 2" > include/dt-bindings/leds/common.h
+          echo "#define LED_FUNCTION_STATUS \"status\"" >> include/dt-bindings/leds/common.h
+          echo "#define LED_FUNCTION_ACTIVITY \"activity\"" >> include/dt-bindings/leds/common.h
 
       - name: Run Syntax Check
         run: |
           echo "Processing DTS..."
-          # 1. 预处理
-          cpp -nostdinc -I include -undef -x assembler-with-cpp sun8i-t113-tronlong-minievm.dts > temp.dts
+          # 使用 cpp 预处理，指定 include 目录
+          if ! cpp -nostdinc -I include -undef -x assembler-with-cpp sun8i-t113-tronlong-minievm.dts > temp.dts; then
+            echo "❌ CPP Pre-processing failed!"
+            exit 1
+          fi
           
-          # 2. 编译检查
           echo "Compiling DTS..."
-          dtc -I dts -O dtb -o test.dtb temp.dts
+          # 尝试编译
+          if ! dtc -I dts -O dtb -o test.dtb temp.dts; then
+            echo "❌ DTC Syntax Error found!"
+            exit 1
+          fi
           
-          echo "✅ DTS Syntax is Valid!"
+          echo "✅ SUCCESS: DTS Syntax is Valid!"

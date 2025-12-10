@@ -2,9 +2,23 @@
 /dts-v1/;
 
 #include "sun8i-t113s.dtsi"
-#include <dt-bindings/gpio/gpio.h>
-#include <dt-bindings/leds/common.h>
-#include <dt-bindings/interrupt-controller/irq.h>
+
+/* 
+ * ⚠️ 手动定义必要的宏，不再引用外部头文件 
+ * 确保 DTC 编译绝对通过
+ */
+#ifndef GPIO_ACTIVE_HIGH
+#define GPIO_ACTIVE_HIGH 0
+#endif
+#ifndef GPIO_ACTIVE_LOW
+#define GPIO_ACTIVE_LOW 1
+#endif
+#ifndef LED_COLOR_ID_GREEN
+#define LED_COLOR_ID_GREEN 2
+#endif
+#ifndef LED_FUNCTION_STATUS
+#define LED_FUNCTION_STATUS "status"
+#endif
 
 / {
 	model = "Tronlong TLT113-MiniEVM (NAND/HDMI)";
@@ -123,7 +137,6 @@
 &mmc0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&mmc0_pins>;
-	/* 修正：引用我们新建的 reg_vcc3v3 */
 	vmmc-supply = <&reg_vcc3v3>;
 	bus-width = <4>;
 	cd-gpios = <&pio 5 6 GPIO_ACTIVE_LOW>;
@@ -237,4 +250,3 @@
 &ohci1 { status = "okay"; };
 &ehci0 { status = "okay"; };
 &ohci0 { status = "okay"; };
-/* &tcon_tv0 { status = "disabled"; }; */

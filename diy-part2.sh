@@ -1,5 +1,5 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (Sed Delimiter Fix)
+# Description: OpenWrt DIY script part 2 (Fix U-Boot InstallDev Patch)
 
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
@@ -10,7 +10,9 @@ echo "-------------------------------------------------------"
 echo "Starting DIY Part 2: Customizing for Tronlong TLT113-MiniEVM"
 echo "-------------------------------------------------------"
 
+# ==============================================================================
 # 1. 部署 DTS 文件
+# ==============================================================================
 mkdir -p "$KERNEL_DTS_DIR"
 mkdir -p target/linux/sunxi/dts
 
@@ -20,26 +22,31 @@ if ls files/*.dts* 1> /dev/null 2>&1; then
     cp files/*.dts* target/linux/sunxi/dts/
     echo "  -> Success: Device Tree files deployed."
 else
-    echo "  -> Error: No .dts or .dtsi files found!"
+    echo "  -> Error: No .dts or .dtsi files found in files/ directory!"
     exit 1
 fi
 
-# 2. [核心修复] 修改 U-Boot Makefile
-# 修复说明：使用 '@' 作为 sed 分隔符，避免与 '|| true' 中的管道符冲突
+# ==============================================================================
+# 2. [核心修复] Patch U-Boot Makefile (针对 Build/InstallDev)
+# ==============================================================================
 echo "  -> Patching U-Boot Makefile to generate device-specific boot script..."
 
 if [ -f "$UBOOT_MAKEFILE" ]; then
-    # 逻辑：在 u-boot-sunxi 的 install 块末尾，追加复制命令
-    # 这里的 $(1)/boot.scr 是源文件， $(1)/tronlong_tlt113-minievm-boot.scr 是目标文件
-    sed -i '/define Package\/u-boot-sunxi\/install/,/endef/ s@endef@	# Patch for Tronlong\n	cp $(1)/boot.scr $(1)/tronlong_tlt113-minievm-boot.scr || true\nendef@' "$UBOOT_MAKEFILE"
+    # 逻辑：
+    # 1. 搜索 'define Build/InstallDev' 区块
+    # 2. 在该区块的 'endef' 之前，插入复制命令
+    # 3. 复制命令：把生成的 $(BUILD_DEVICES)-boot.scr 复制一份为 tronlong_tlt113-minievm-boot.scr
     
-    # 检查是否修改成功
+    # 这里的 sed 命令会在 'define Build/InstallDev' 之后的第一个 'endef' 前插入代码
+    sed -i '/define Build\/InstallDev/,/endef/ s@endef@	# Patch for Tronlong\n	cp $(STAGING_DIR_IMAGE)/$(BUILD_DEVICES)-boot.scr $(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-boot.scr || true\nendef@' "$UBOOT_MAKEFILE"
+    
+    # 验证 Patch 是否写入
     if grep -q "tronlong_tlt113-minievm-boot.scr" "$UBOOT_MAKEFILE"; then
         echo "  -> Success: U-Boot Makefile patched successfully."
     else
         echo "  -> Error: Failed to patch U-Boot Makefile!"
-        # 打印出文件最后几行看看情况，方便调试（可选）
-        tail -n 20 "$UBOOT_MAKEFILE"
+        # 打印 Makefile 内容以便调试 (只打最后30行)
+        tail -n 30 "$UBOOT_MAKEFILE"
         exit 1
     fi
 else
@@ -47,7 +54,9 @@ else
     exit 1
 fi
 
+# ==============================================================================
 # 3. 注入机型定义
+# ==============================================================================
 if [ ! -f "$TARGET_MK" ]; then
     echo "  -> Error: Target Makefile $TARGET_MK not found!"
     exit 1

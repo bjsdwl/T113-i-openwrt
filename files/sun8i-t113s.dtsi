@@ -1,12 +1,27 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /*
  * Copyright (C) 2022 Samuel Holland <samuel@sholland.org>
+ * Modified for Tronlong T113-i (Self-contained version)
  */
 
-#include <dt-bindings/interrupt-controller/arm-gic.h>
-/* 修正：使用内核自带的 D1 (sun20i) 时钟和复位定义 */
-#include <dt-bindings/clock/sun20i-d1-ccu.h>
-#include <dt-bindings/reset/sun20i-d1-ccu.h>
+/* 
+ * ⚠️ 硬编码宏定义，彻底摆脱头文件依赖 
+ */
+#ifndef GIC_SPI
+#define GIC_SPI 0
+#endif
+#ifndef GIC_PPI
+#define GIC_PPI 1
+#endif
+#ifndef IRQ_TYPE_LEVEL_HIGH
+#define IRQ_TYPE_LEVEL_HIGH 4
+#endif
+#ifndef IRQ_TYPE_LEVEL_LOW
+#define IRQ_TYPE_LEVEL_LOW 8
+#endif
+#ifndef CLK_CPUX
+#define CLK_CPUX 0
+#endif
 
 / {
 	#address-cells = <1>;
@@ -21,7 +36,6 @@
 			compatible = "arm,cortex-a7";
 			device_type = "cpu";
 			reg = <0>;
-			/* 修正：使用 D1 定义的 CLK_CPUX */
 			clocks = <&ccu CLK_CPUX>;
 			clock-names = "cpu";
 			operating-points-v2 = <&cpu_opp_table>;
@@ -31,7 +45,6 @@
 			compatible = "arm,cortex-a7";
 			device_type = "cpu";
 			reg = <1>;
-			/* 修正：使用 D1 定义的 CLK_CPUX */
 			clocks = <&ccu CLK_CPUX>;
 			clock-names = "cpu";
 			operating-points-v2 = <&cpu_opp_table>;
@@ -64,7 +77,7 @@
 
 		opp-1200000000 {
 			opp-hz = /bits/ 64 <1200000000>;
-			opp-microvolt = <1000000>;
+			opp-microvolt = <1200000>;
 		};
 	};
 
@@ -102,5 +115,5 @@
 	};
 };
 
-/* 引用 D1s 外设定义 */
+/* 引用外设定义 */
 #include "sun20i-d1s.dtsi"

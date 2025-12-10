@@ -1,0 +1,49 @@
+name: Fast DTS Syntax Check
+
+on:
+  push:
+    paths:
+      - 'files/**'  # 只有当 files 目录下的文件变化时才触发
+  workflow_dispatch:
+
+jobs:
+  check-dts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y device-tree-compiler gcc
+
+      - name: Setup Mock Environment
+        run: |
+          # 把 files 目录下的文件移出来方便操作
+          cp files/* .
+          
+          # 创建假头文件目录结构，骗过预处理器
+          mkdir -p include/dt-bindings/interrupt-controller
+          mkdir -p include/dt-bindings/clock
+          mkdir -p include/dt-bindings/reset
+          mkdir -p include/dt-bindings/dma
+          
+          # 创建空文件
+          touch include/dt-bindings/interrupt-controller/arm-gic.h
+          touch include/dt-bindings/interrupt-controller/irq.h
+          touch include/dt-bindings/dma/sun4i-a10.h
+          touch include/dt-bindings/clock/sun20i-d1-ccu.h
+          touch include/dt-bindings/reset/sun20i-d1-ccu.h
+
+      - name: Run Syntax Check
+        run: |
+          echo "Processing DTS..."
+          # 1. 预处理
+          cpp -nostdinc -I include -undef -x assembler-with-cpp sun8i-t113-tronlong-minievm.dts > temp.dts
+          
+          # 2. 编译检查
+          echo "Compiling DTS..."
+          dtc -I dts -O dtb -o test.dtb temp.dts
+          
+          echo "✅ DTS Syntax is Valid!"

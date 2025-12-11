@@ -1,13 +1,13 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (Double Safety Fix)
+# Description: OpenWrt DIY script part 2 (Manual Boot Script Injection)
 
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
 KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
-UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
+IMAGE_MAKEFILE="target/linux/sunxi/image/Makefile"
 
 echo "-------------------------------------------------------"
-echo "Starting DIY Part 2: Customizing for Tronlong TLT113-MiniEVM"
+echo "Starting DIY Part 2: Manual Boot Script Strategy"
 echo "-------------------------------------------------------"
 
 # ==============================================================================
@@ -20,38 +20,58 @@ if ls files/*.dts* 1> /dev/null 2>&1; then
     echo "  -> Found DTS files. Copying..."
     cp files/*.dts* "$KERNEL_DTS_DIR/"
     cp files/*.dts* target/linux/sunxi/dts/
-    echo "  -> Success: Device Tree files deployed."
 else
-    echo "  -> Error: No .dts or .dtsi files found in files/ directory!"
+    echo "  -> Error: No DTS files found!"
     exit 1
 fi
 
 # ==============================================================================
-# 2. [保险措施] 修改 U-Boot Makefile (强制生成副本)
+# 2. [核心绝招] 手动生成 boot.scr (Bypass U-Boot build artifacts)
 # ==============================================================================
-# 既然 ImageBuilder 想要 tronlong_tlt113-minievm-boot.scr，我们就让 U-Boot 顺便生成一个
-echo "  -> Patching U-Boot Makefile to ensure boot script exists..."
+echo "  -> Generating custom boot.scr..."
 
-if [ -f "$UBOOT_MAKEFILE" ]; then
-    # 使用 perl 替代 sed 进行多行匹配替换，更稳定，避免分隔符问题
-    # 逻辑：找到 'endef' (属于 Build/InstallDev 的结尾)，在它前面插入复制命令
-    # 注意：Makefile 必须使用 Tab 缩进
-    
-    perl -i -pe 's|^endef|\t# Patch: Copy boot.scr for Tronlong\n\t$(CP) $(STAGING_DIR_IMAGE)/$(BUILD_DEVICES)-boot.scr $(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-boot.scr\nendef| if /define Build\/InstallDev/ .. /endef/' "$UBOOT_MAKEFILE"
-    
-    # 验证 Patch
-    if grep -q "tronlong_tlt113-minievm-boot.scr" "$UBOOT_MAKEFILE"; then
-        echo "  -> Success: U-Boot Makefile patched."
-    else
-        echo "  -> Warning: Patch verification failed, but we will try the variable method next."
-    fi
+# 创建 boot.cmd (T113 通用启动脚本)
+# 注意：这里指定加载 sun8i-t113-tronlong-minievm.dtb
+cat <<EOF > boot.cmd
+# OpenWrt Boot Script for Tronlong T113
+part uuid mmc 0:2 uuid
+setenv bootargs console=ttyS0,115200 root=PARTUUID=\${uuid} rootwait panic=10
+load mmc 0:1 \${kernel_addr_r} zImage
+load mmc 0:1 \${fdt_addr_r} $DTS_NAME.dtb
+bootz \${kernel_addr_r} - \${fdt_addr_r}
+EOF
+
+# 编译生成 boot.scr
+# 这里的路径 files/boot.scr 是相对于 OpenWrt 源码根目录的
+mkimage -C none -A arm -T script -d boot.cmd files/boot.scr
+
+if [ -f "files/boot.scr" ]; then
+    echo "  -> Success: files/boot.scr generated."
 else
-    echo "  -> Error: U-Boot Makefile not found at $UBOOT_MAKEFILE"
-    # 不退出，继续尝试下面的方法
+    echo "  -> Error: Failed to generate boot.scr! Check if u-boot-tools is installed."
+    exit 1
 fi
 
 # ==============================================================================
-# 3. 注入机型定义 (指定正确的 BOOT_SCRIPT)
+# 3. 修改 Image Makefile (强制使用我们的 boot.scr)
+# ==============================================================================
+echo "  -> Patching Image Makefile to use local boot.scr..."
+
+if [ -f "$IMAGE_MAKEFILE" ]; then
+    # 原始命令类似：mcopy -i $@.boot $(STAGING_DIR_IMAGE)/$(DEVICE_NAME)-boot.scr ::boot.scr
+    # 我们要把它替换为：mcopy -i $@.boot $(TOPDIR)/files/boot.scr ::boot.scr
+    
+    # 这里的 TOPDIR 是 OpenWrt 构建系统的一个变量，指向源码根目录
+    sed -i 's|\$(STAGING_DIR_IMAGE)/\$(DEVICE_NAME)-boot.scr|\$(TOPDIR)/files/boot.scr|g' "$IMAGE_MAKEFILE"
+    
+    echo "  -> Success: Makefile patched to use local file."
+else
+    echo "  -> Error: Image Makefile not found!"
+    exit 1
+fi
+
+# ==============================================================================
+# 4. 注入机型定义
 # ==============================================================================
 if [ ! -f "$TARGET_MK" ]; then
     echo "  -> Error: Target Makefile $TARGET_MK not found!"
@@ -62,24 +82,13 @@ cat <<EOF >> "$TARGET_MK"
 
 # --- Added by DIY Script for Tronlong TLT113-MiniEVM ---
 define Device/tronlong_tlt113-minievm
-  # 1. 继承基础配置
   \$(Device/sunxi-img)
-  
-  # 2. 基础信息
   DEVICE_VENDOR := Tronlong
   DEVICE_MODEL := TLT113-MiniEVM (NAND/HDMI)
   DEVICE_DTS := $DTS_NAME
-  
-  # 3. U-Boot 配置
+  # 借用一个存在的 U-Boot 配置以通过编译依赖检查
   DEVICE_UBOOT := sun8i-r528-qa-board
-  
-  # 4. [核心] 指向真实存在的启动脚本文件
-  # 因为 DEVICE_UBOOT 是 sun8i-r528-qa-board，所以生成的脚本必然叫这个名字
-  BOOT_SCRIPT := sun8i-r528-qa-board-boot
-  
-  # 5. 内存参数
   UBOOT_CONFIG_OVERRIDES := CONFIG_DRAM_CLK=792 CONFIG_DRAM_ZQ=8092667 CONFIG_DEFAULT_DEVICE_TREE="$DTS_NAME"
-  
   SUPPORTED_DEVICES := tronlong,tlt113-minievm
 endef
 TARGET_DEVICES += tronlong_tlt113-minievm

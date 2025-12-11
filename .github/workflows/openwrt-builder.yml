@@ -98,6 +98,42 @@ jobs:
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
+    # ==================================================================================
+    # 🔍 新增步骤：收集关键调试信息 (Collect Debug Evidence)
+    # 无论编译成功或失败，这一步都会执行
+    # ==================================================================================
+    - name: Collect Debug Evidence
+      if: always()
+      run: |
+        cd openwrt
+        mkdir -p debug_evidence
+        
+        echo "Collecting U-Boot Makefile..."
+        if [ -f "package/boot/uboot-sunxi/Makefile" ]; then
+          cp package/boot/uboot-sunxi/Makefile debug_evidence/uboot_makefile_dump.txt
+        else
+          echo "ERROR: package/boot/uboot-sunxi/Makefile NOT FOUND" > debug_evidence/uboot_makefile_error.txt
+        fi
+        
+        echo "Collecting Cortex-A7 Make definition..."
+        if [ -f "target/linux/sunxi/image/cortexa7.mk" ]; then
+          cp target/linux/sunxi/image/cortexa7.mk debug_evidence/cortexa7_mk_dump.txt
+        fi
+
+        echo "Searching for any boot.scr files..."
+        find . -name "*boot.scr" > debug_evidence/found_boot_scr.txt 2>&1
+        
+        echo "Listing contents of staging_dir image directory..."
+        ls -R staging_dir/target-*/image/ > debug_evidence/staging_dir_list.txt 2>&1 || echo "Directory not found" >> debug_evidence/staging_dir_list.txt
+
+    - name: Upload Debug Evidence
+      uses: actions/upload-artifact@main
+      if: always()
+      with:
+        name: debug_evidence
+        path: openwrt/debug_evidence/
+    # ==================================================================================
+
     - name: Check space usage
       if: (!cancelled())
       run: df -hT

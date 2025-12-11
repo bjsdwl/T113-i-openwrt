@@ -1,30 +1,23 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (Evidence Gathering Mode)
+# Description: OpenWrt DIY script part 2 (Evidence Collection Mode)
 
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
 KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
 UBOOT_MAKEFILE="package/boot/uboot-sunxi/Makefile"
+IMAGE_MAKEFILE="target/linux/sunxi/image/Makefile"
 
-echo "-------------------------------------------------------"
-echo "Starting DIY Part 2: EVIDENCE GATHERING MODE"
-echo "-------------------------------------------------------"
+echo "--- STARTING EVIDENCE COLLECTION ---"
 
-# ==============================================================================
-# 1. 部署 DTS (保持原样，确保内核能编过)
-# ==============================================================================
+# 1. 正常部署 DTS (保持原样，以便触发后续流程)
 mkdir -p "$KERNEL_DTS_DIR"
 mkdir -p target/linux/sunxi/dts
-
 if ls files/*.dts* 1> /dev/null 2>&1; then
     cp files/*.dts* "$KERNEL_DTS_DIR/"
     cp files/*.dts* target/linux/sunxi/dts/
-    echo "  -> DTS files deployed."
 fi
 
-# ==============================================================================
-# 2. 注入机型 (保持原样，确保能触发构建)
-# ==============================================================================
+# 2. 正常注入机型 (保持原样)
 cat <<EOF >> "$TARGET_MK"
 define Device/tronlong_tlt113-minievm
   \$(Device/sunxi-img)
@@ -37,34 +30,28 @@ define Device/tronlong_tlt113-minievm
 endef
 TARGET_DEVICES += tronlong_tlt113-minievm
 EOF
-echo "  -> Device definition injected."
 
-# ==============================================================================
-# 3. [核心任务] 收集证据 (Collect Evidence)
-# ==============================================================================
-# 我们将关键文件复制到 debug_files 目录（配合 Workflow 上传）
-# 同时直接打印到控制台，方便你直接看日志
-# ==============================================================================
+# 3. [关键步骤] 收集证据文件到 debug_evidence 目录
+mkdir -p debug_evidence
 
-echo "  -> Collecting Makefiles for analysis..."
-mkdir -p debug_files
-
+# 收集 U-Boot 的 Makefile (查看安装逻辑)
 if [ -f "$UBOOT_MAKEFILE" ]; then
-    # 1. 复制文件以便打包下载
-    cp "$UBOOT_MAKEFILE" debug_files/uboot_makefile_dump.txt
-    
-    # 2. 【重点】直接打印文件内容到日志！
-    # 这样你不需要下载 Artifacts，直接在 GitHub 网页日志里就能看到，复制给我即可。
-    echo "======================================================="
-    echo "START OF FILE: $UBOOT_MAKEFILE"
-    echo "======================================================="
-    cat "$UBOOT_MAKEFILE"
-    echo "======================================================="
-    echo "END OF FILE: $UBOOT_MAKEFILE"
-    echo "======================================================="
+    cp "$UBOOT_MAKEFILE" debug_evidence/uboot_makefile.txt
+    echo "Collected: uboot_makefile.txt"
 else
-    echo "!! ERROR: $UBOOT_MAKEFILE NOT FOUND !!"
+    echo "MISSING: U-Boot Makefile not found!" > debug_evidence/error_uboot.txt
 fi
 
-echo "-------------------------------------------------------"
-echo "DIY Part 2 Finished. Please check build logs for Makefile content."
+# 收集 Image 的 Makefile (查看打包逻辑)
+if [ -f "$IMAGE_MAKEFILE" ]; then
+    cp "$IMAGE_MAKEFILE" debug_evidence/image_makefile.txt
+    echo "Collected: image_makefile.txt"
+fi
+
+# 收集我们刚刚修改过的 cortexa7.mk (确认注入是否生效)
+if [ -f "$TARGET_MK" ]; then
+    cp "$TARGET_MK" debug_evidence/cortexa7_mk.txt
+    echo "Collected: cortexa7_mk.txt"
+fi
+
+echo "--- EVIDENCE COLLECTION FINISHED ---"

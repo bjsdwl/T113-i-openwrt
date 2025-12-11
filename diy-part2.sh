@@ -1,5 +1,5 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (Evidence-based Fix)
+# Description: OpenWrt DIY script part 2 (Double Safety Fix)
 
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
@@ -27,37 +27,31 @@ else
 fi
 
 # ==============================================================================
-# 2. [核心修复] 精准修改 U-Boot Makefile
+# 2. [保险措施] 修改 U-Boot Makefile (强制生成副本)
 # ==============================================================================
-echo "  -> Patching U-Boot Makefile to generate device-specific boot script..."
+# 既然 ImageBuilder 想要 tronlong_tlt113-minievm-boot.scr，我们就让 U-Boot 顺便生成一个
+echo "  -> Patching U-Boot Makefile to ensure boot script exists..."
 
 if [ -f "$UBOOT_MAKEFILE" ]; then
-    # 既然我们已经拿到文件内容，知道 'define Build/InstallDev' 是存在的。
-    # 我们使用 sed 在 'endef' 之前插入一行 cp 命令。
-    # 命令逻辑：cp $(STAGING_DIR_IMAGE)/$(BUILD_DEVICES)-boot.scr $(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-boot.scr
+    # 使用 perl 替代 sed 进行多行匹配替换，更稳定，避免分隔符问题
+    # 逻辑：找到 'endef' (属于 Build/InstallDev 的结尾)，在它前面插入复制命令
+    # 注意：Makefile 必须使用 Tab 缩进
     
-    # 匹配 Build/InstallDev 区块内的 endef，替换为：复制命令 + 换行 + endef
-    # 使用 '#' 作为分隔符，防止路径斜杠冲突
-    sed -i '/define Build\/InstallDev/,/endef/ s#endef#	$(CP) $(STAGING_DIR_IMAGE)/$(BUILD_DEVICES)-boot.scr $(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-boot.scr\nendef#' "$UBOOT_MAKEFILE"
+    perl -i -pe 's|^endef|\t# Patch: Copy boot.scr for Tronlong\n\t$(CP) $(STAGING_DIR_IMAGE)/$(BUILD_DEVICES)-boot.scr $(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-boot.scr\nendef| if /define Build\/InstallDev/ .. /endef/' "$UBOOT_MAKEFILE"
     
-    # 验证 Patch 是否写入
+    # 验证 Patch
     if grep -q "tronlong_tlt113-minievm-boot.scr" "$UBOOT_MAKEFILE"; then
-        echo "  -> Success: U-Boot Makefile patched successfully."
-        # 输出一下 Patch 后的最后几行确认
-        echo "--- Patched Content (Partial) ---"
-        grep -A 10 "define Build/InstallDev" "$UBOOT_MAKEFILE"
-        echo "---------------------------------"
+        echo "  -> Success: U-Boot Makefile patched."
     else
-        echo "  -> Error: Failed to patch U-Boot Makefile!"
-        exit 1
+        echo "  -> Warning: Patch verification failed, but we will try the variable method next."
     fi
 else
     echo "  -> Error: U-Boot Makefile not found at $UBOOT_MAKEFILE"
-    exit 1
+    # 不退出，继续尝试下面的方法
 fi
 
 # ==============================================================================
-# 3. 注入机型定义
+# 3. 注入机型定义 (指定正确的 BOOT_SCRIPT)
 # ==============================================================================
 if [ ! -f "$TARGET_MK" ]; then
     echo "  -> Error: Target Makefile $TARGET_MK not found!"
@@ -68,13 +62,24 @@ cat <<EOF >> "$TARGET_MK"
 
 # --- Added by DIY Script for Tronlong TLT113-MiniEVM ---
 define Device/tronlong_tlt113-minievm
+  # 1. 继承基础配置
   \$(Device/sunxi-img)
+  
+  # 2. 基础信息
   DEVICE_VENDOR := Tronlong
   DEVICE_MODEL := TLT113-MiniEVM (NAND/HDMI)
   DEVICE_DTS := $DTS_NAME
+  
+  # 3. U-Boot 配置
   DEVICE_UBOOT := sun8i-r528-qa-board
-  # 既然我们已经物理复制了文件，就不需要再覆盖 BOOT_SCRIPT 变量了，让它找同名文件即可
+  
+  # 4. [核心] 指向真实存在的启动脚本文件
+  # 因为 DEVICE_UBOOT 是 sun8i-r528-qa-board，所以生成的脚本必然叫这个名字
+  BOOT_SCRIPT := sun8i-r528-qa-board-boot
+  
+  # 5. 内存参数
   UBOOT_CONFIG_OVERRIDES := CONFIG_DRAM_CLK=792 CONFIG_DRAM_ZQ=8092667 CONFIG_DEFAULT_DEVICE_TREE="$DTS_NAME"
+  
   SUPPORTED_DEVICES := tronlong,tlt113-minievm
 endef
 TARGET_DEVICES += tronlong_tlt113-minievm

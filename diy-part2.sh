@@ -1,10 +1,13 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (Manual Boot Script Generator)
+# Description: OpenWrt DIY script part 2 (Final Fix: U-Boot Binary Path)
 
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
 KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
 IMAGE_MAKEFILE="target/linux/sunxi/image/Makefile"
+
+# 我们借用的 U-Boot 机型名称
+UBOOT_DEVICE_NAME="sun8i-r528-qa-board"
 
 echo "-------------------------------------------------------"
 echo "Starting DIY Part 2: Customizing for Tronlong TLT113-MiniEVM"
@@ -27,15 +30,10 @@ else
 fi
 
 # ==============================================================================
-# 2. [核心绝招] 手动生成 boot.scr
+# 2. 手动生成 boot.scr
 # ==============================================================================
 echo "  -> Generating custom boot.scr..."
 
-# 创建 boot.cmd 内容
-# 这是一个标准的 OpenWrt 启动脚本：
-# 1. 设置启动参数 (console=ttyS0)
-# 2. 从 SD 卡 (mmc 0) 加载 zImage 和 dtb
-# 3. 启动内核
 cat <<EOF > boot.cmd
 # OpenWrt Boot Script for Tronlong T113
 part uuid mmc 0:2 uuid
@@ -45,33 +43,30 @@ load mmc 0:1 \${fdt_addr_r} $DTS_NAME.dtb
 bootz \${kernel_addr_r} - \${fdt_addr_r}
 EOF
 
-# 编译 boot.cmd -> boot.scr
-# 注意：这需要 u-boot-tools，我们在 Workflow 里已经安装了
 mkimage -C none -A arm -T script -d boot.cmd files/boot.scr
 
 if [ -f "files/boot.scr" ]; then
     echo "  -> Success: files/boot.scr generated."
 else
-    echo "  -> Error: Failed to generate boot.scr! Check if u-boot-tools is installed."
+    echo "  -> Error: Failed to generate boot.scr!"
     exit 1
 fi
 
 # ==============================================================================
-# 3. 修改 Image Makefile (强制使用我们的 boot.scr)
+# 3. [核心绝招] 暴力修改 Image Makefile
+# 修复 boot.scr 和 u-boot-with-spl.bin 的路径问题
 # ==============================================================================
-echo "  -> Patching Image Makefile to use local boot.scr..."
+echo "  -> Patching Image Makefile..."
 
 if [ -f "$IMAGE_MAKEFILE" ]; then
-    # 原始命令：mcopy -i ... $(STAGING_DIR_IMAGE)/$(DEVICE_NAME)-boot.scr ...
-    # 修改为：  mcopy -i ... $(TOPDIR)/files/boot.scr ...
-    
-    # 使用 sed 强行替换变量引用
+    # 修复 1: 强制使用我们手动生成的 boot.scr
     sed -i 's|\$(STAGING_DIR_IMAGE)/\$(DEVICE_NAME)-boot.scr|\$(TOPDIR)/files/boot.scr|g' "$IMAGE_MAKEFILE"
     
-    # 双重保险：有些版本可能用的是 $(IMAGE_NAME)-boot.scr
-    sed -i 's|\$(STAGING_DIR_IMAGE)/\$(IMAGE_NAME)-boot.scr|\$(TOPDIR)/files/boot.scr|g' "$IMAGE_MAKEFILE"
+    # 修复 2: 强制指向真实存在的 U-Boot 二进制文件 (sun8i-r528-qa-board-u-boot-with-spl.bin)
+    # 这一步将 $(DEVICE_NAME)-u-boot-with-spl.bin 替换为我们借用的那个机型的文件名
+    sed -i "s|\$(STAGING_DIR_IMAGE)/\$(DEVICE_NAME)-u-boot-with-spl.bin|\$(STAGING_DIR_IMAGE)/${UBOOT_DEVICE_NAME}-u-boot-with-spl.bin|g" "$IMAGE_MAKEFILE"
     
-    echo "  -> Success: Makefile patched to use local file."
+    echo "  -> Success: Makefile patched to fix file paths."
 else
     echo "  -> Error: Image Makefile not found!"
     exit 1
@@ -93,8 +88,7 @@ define Device/tronlong_tlt113-minievm
   DEVICE_VENDOR := Tronlong
   DEVICE_MODEL := TLT113-MiniEVM (NAND/HDMI)
   DEVICE_DTS := $DTS_NAME
-  # 借用通用 U-Boot 配置
-  DEVICE_UBOOT := sun8i-r528-qa-board
+  DEVICE_UBOOT := $UBOOT_DEVICE_NAME
   UBOOT_CONFIG_OVERRIDES := CONFIG_DRAM_CLK=792 CONFIG_DRAM_ZQ=8092667 CONFIG_DEFAULT_DEVICE_TREE="$DTS_NAME"
   SUPPORTED_DEVICES := tronlong,tlt113-minievm
 endef

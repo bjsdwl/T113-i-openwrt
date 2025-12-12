@@ -1,6 +1,7 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (Final Fix: Escaped Variables)
+# Description: OpenWrt DIY script part 2 (U-Boot Target Injection Edition)
 
+# 变量定义
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
 KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
@@ -10,65 +11,72 @@ echo "-------------------------------------------------------"
 echo "Starting DIY Part 2: Customizing for Tronlong TLT113-MiniEVM"
 echo "-------------------------------------------------------"
 
-# 1. 部署 DTS
+# ==============================================================================
+# 1. 部署所有 DTS/DTSI 文件 (保持不变)
+# ==============================================================================
+echo "[1/3] Deploying Device Tree Files..."
 mkdir -p "$KERNEL_DTS_DIR"
 mkdir -p target/linux/sunxi/dts
-
 if ls files/*.dts* 1> /dev/null 2>&1; then
-    echo "  -> Found DTS files. Copying..."
     cp files/*.dts* "$KERNEL_DTS_DIR/"
     cp files/*.dts* target/linux/sunxi/dts/
-    echo "  -> Success: Device Tree files deployed."
+    echo "  -> DTS files deployed."
 else
-    echo "  -> Error: No .dts or .dtsi files found in files/ directory!"
+    echo "  -> Error: No DTS files found in files/ !"
     exit 1
 fi
 
-# 2. [核心修复] 修改 U-Boot Makefile
-# 修复说明：使用单引号防止 shell 变量扩展，确保写入 Makefile 的是 $(CP) 而不是空值或乱码
-echo "  -> Patching U-Boot Makefile to generate device-specific boot script..."
+# ==============================================================================
+# 2. [核心修复] 在 U-Boot Makefile 中注册新机型
+# ==============================================================================
+echo "[2/3] Registering tronlong_tlt113-minievm in U-Boot Makefile..."
 
 if [ -f "$UBOOT_MAKEFILE" ]; then
-    # 策略：使用 sed 在 endef 前插入命令
-    # 注意：我们使用单引号 '...' 包裹 sed 命令，这样里面的 $(...) 不会被 Shell 解析
-    # Makefile 需要 Tab 缩进，这里用 \t 表示
-    
-    sed -i "/define Build\/InstallDev/,/endef/ s|endef|\t# Patch for Tronlong\n\t\$(CP) \$(STAGING_DIR_IMAGE)/\$(BUILD_DEVICES)-boot.scr \$(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-boot.scr\nendef|" "$UBOOT_MAKEFILE"
-    
-    # 验证 Patch 是否写入 (检查是否包含 CP 命令)
-    if grep -q "tronlong_tlt113-minievm-boot.scr" "$UBOOT_MAKEFILE"; then
-        echo "  -> Success: U-Boot Makefile patched successfully."
-        # 输出最后几行确认内容正确
-        tail -n 10 "$UBOOT_MAKEFILE"
-    else
-        echo "  -> Error: Failed to patch U-Boot Makefile!"
-        exit 1
-    fi
+    # A. 插入 U-Boot 定义块 (借用 R528 配置)
+    # 我们在 BuildPackage/U-Boot 调用前插入定义
+    sed -i '/define Build\/InstallDev/i \
+define U-Boot/tronlong_tlt113-minievm\
+  BUILD_SUBTARGET:=cortexa7\
+  NAME:=Tronlong TLT113 MiniEVM\
+  BUILD_DEVICES:=tronlong_tlt113-minievm\
+  UBOOT_CONFIG:=sun8i_r528\
+  UENV:=default\
+endef\
+' "$UBOOT_MAKEFILE"
+
+    # B. 将新机型加入 UBOOT_TARGETS 列表 (关键！)
+    # 我们把名字追加到列表的最后
+    sed -i '/UBOOT_TARGETS :=/a \	tronlong_tlt113-minievm \\' "$UBOOT_MAKEFILE"
+
+    echo "  -> Success: U-Boot target registered."
 else
-    echo "  -> Error: U-Boot Makefile not found at $UBOOT_MAKEFILE"
+    echo "  -> Error: U-Boot Makefile not found!"
     exit 1
 fi
 
-# 3. 注入机型定义
+# ==============================================================================
+# 3. 注入 OpenWrt 机型定义
+# ==============================================================================
+echo "[3/3] Injecting device definition into $TARGET_MK..."
+
 if [ ! -f "$TARGET_MK" ]; then
-    echo "  -> Error: Target Makefile $TARGET_MK not found!"
+    echo "  -> Error: Target Makefile not found!"
     exit 1
 fi
 
+# ⚠️ 注意：DEVICE_UBOOT 必须指向我们刚刚在上面注册的名字
 cat <<EOF >> "$TARGET_MK"
 
-# --- Added by DIY Script for Tronlong TLT113-MiniEVM ---
 define Device/tronlong_tlt113-minievm
   \$(Device/sunxi-img)
   DEVICE_VENDOR := Tronlong
   DEVICE_MODEL := TLT113-MiniEVM (NAND/HDMI)
   DEVICE_DTS := $DTS_NAME
-  DEVICE_UBOOT := sun8i-r528-qa-board
+  DEVICE_UBOOT := tronlong_tlt113-minievm
   UBOOT_CONFIG_OVERRIDES := CONFIG_DRAM_CLK=792 CONFIG_DRAM_ZQ=8092667 CONFIG_DEFAULT_DEVICE_TREE="$DTS_NAME"
   SUPPORTED_DEVICES := tronlong,tlt113-minievm
 endef
 TARGET_DEVICES += tronlong_tlt113-minievm
-# -------------------------------------------------------
 EOF
 
 echo "  -> Success: Device definition appended."

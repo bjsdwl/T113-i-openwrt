@@ -1,65 +1,79 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (Hijack MangoPi MQ-R Strategy)
+# Description: OpenWrt DIY script part 2 (Smart Hijack Strategy)
 
-# 你的源文件名
+# 你的源文件 (创龙配置)
 MY_DTS="sun8i-t113-tronlong-minievm.dts"
-# 宿主的文件名 (我们要覆盖的目标)
-HOST_DTS="sun8i-t113s-mangopi-mq-r.dts"
+# 宿主文件名 (MangoPi)
+HOST_DTS_NAME="sun8i-t113s-mangopi-mq-r.dts"
+# 宿主机型 ID (Makefile 中的 Device Name)
+HOST_DEVICE_ID="mangopi_mq-r"
 
-# OpenWrt 内核源码覆盖目录
 KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
-TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
 
 echo "-------------------------------------------------------"
-echo "Starting DIY Part 2: Operation Hijack MangoPi"
+echo "Starting DIY Part 2: Smart Hijack Operation"
 echo "-------------------------------------------------------"
 
 # ==============================================================================
-# 1. 偷梁换柱：替换 DTS 文件
+# 1. 偷梁换柱：DTS 替换
 # ==============================================================================
-echo "[1/2] Replacing MangoPi DTS with Tronlong DTS..."
-
+echo "[1/3] Hijacking DTS..."
 mkdir -p "$KERNEL_DTS_DIR"
+mkdir -p target/linux/sunxi/dts
 
 if [ -f "files/$MY_DTS" ]; then
-    # 1. 也就是把你的 dts 复制进去，但改名叫 sun8i-t113s-mangopi-mq-r.dts
-    # 这样编译系统毫无察觉，直接使用你的配置
-    cp "files/$MY_DTS" "$KERNEL_DTS_DIR/$HOST_DTS"
-    echo "  -> Hijacked: $HOST_DTS is now Tronlong content."
+    # 覆盖 Kernel Overlay
+    cp "files/$MY_DTS" "$KERNEL_DTS_DIR/$HOST_DTS_NAME"
+    # 覆盖标准目录
+    cp "files/$MY_DTS" "target/linux/sunxi/dts/$HOST_DTS_NAME"
     
-    # 2. 别忘了把那两个依赖的 .dtsi 文件也放进去
-    # (t113s.dtsi 和 sun20i-d1s.dtsi)
+    # 注入依赖的 dtsi
     cp files/*.dtsi "$KERNEL_DTS_DIR/"
-    echo "  -> Dependencies (.dtsi) injected."
+    cp files/*.dtsi "target/linux/sunxi/dts/"
+    
+    echo "  -> Success: DTS hijacked ($HOST_DTS_NAME is now Tronlong)."
 else
-    echo "  -> Error: Source file files/$MY_DTS not found!"
+    echo "  -> Error: Source files/$MY_DTS not found!"
     exit 1
 fi
 
 # ==============================================================================
-# 2. 注入参数：修改 U-Boot 内存配置
+# 2. 自动定位目标 Makefile (Smart Find)
 # ==============================================================================
-echo "[2/2] Injecting DDR3 parameters into Makefile..."
+echo "[2/3] Searching for target definition..."
 
-if [ -f "$TARGET_MK" ]; then
-    # 我们要找到 define Device/mangopi_mq-r 这一块
-    # 然后在 endef 之前，插入 UBOOT_CONFIG_OVERRIDES
-    
-    # 你的 DDR3 参数
-    PAYLOAD="  UBOOT_CONFIG_OVERRIDES := CONFIG_DRAM_CLK=792 CONFIG_DRAM_ZQ=8092667"
-    
-    # 使用 sed 在 'define Device/mangopi_mq-r' 区块内的 'endef' 前插入
-    sed -i "/define Device\/mangopi_mq-r/,/endef/ s|endef|$PAYLOAD\nendef|" "$TARGET_MK"
-    
-    # 验证是否修改成功
-    if grep -q "CONFIG_DRAM_CLK=792" "$TARGET_MK"; then
-        echo "  -> Success: DDR3 parameters injected."
-    else
-        echo "  -> Error: Failed to patch Makefile for MangoPi!"
-        exit 1
-    fi
+# 在 sunxi 目录下搜索定义了 mangopi_mq-r 的 .mk 文件
+TARGET_MK=$(grep -l "define Device/$HOST_DEVICE_ID" target/linux/sunxi/image/*.mk | head -n 1)
+
+if [ -z "$TARGET_MK" ]; then
+    echo "  -> Error: Could not find any Makefile defining $HOST_DEVICE_ID"
+    echo "  -> Listing available devices for debugging:"
+    grep -r "define Device/" target/linux/sunxi/image/ | cut -d: -f2 | head -n 20
+    exit 1
 else
-    echo "  -> Error: Target Makefile not found!"
+    echo "  -> Found target definition in: $TARGET_MK"
+fi
+
+# ==============================================================================
+# 3. 注入 DDR3 参数
+# ==============================================================================
+echo "[3/3] Injecting DDR3 parameters..."
+
+# 构造要插入的参数行
+PAYLOAD="  UBOOT_CONFIG_OVERRIDES := CONFIG_DRAM_CLK=792 CONFIG_DRAM_ZQ=8092667"
+
+# 使用 perl 精准替换
+# 逻辑：找到 define Device/mangopi_mq-r ... endef 块
+# 在 endef 之前插入 PAYLOAD
+perl -i -0777 -pe "s|(define Device/$HOST_DEVICE_ID.*?)endef|\1$PAYLOAD\nendef|s" "$TARGET_MK"
+
+# 验证
+if grep -q "CONFIG_DRAM_CLK=792" "$TARGET_MK"; then
+    echo "  -> Success: DDR3 parameters injected into $TARGET_MK"
+else
+    echo "  -> Error: Failed to patch Makefile!"
+    echo "  -> Dumping file content for analysis:"
+    cat "$TARGET_MK"
     exit 1
 fi
 

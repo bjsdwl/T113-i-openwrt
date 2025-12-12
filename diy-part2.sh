@@ -1,5 +1,5 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (Makefile Surgery Edition)
+# Description: OpenWrt DIY script part 2 (Final Fix: Escaped Variables)
 
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
@@ -24,21 +24,24 @@ else
     exit 1
 fi
 
-# 2. [核心修复] 手术刀式修改 U-Boot Makefile
+# 2. [核心修复] 修改 U-Boot Makefile
+# 修复说明：使用单引号防止 shell 变量扩展，确保写入 Makefile 的是 $(CP) 而不是空值或乱码
 echo "  -> Patching U-Boot Makefile to generate device-specific boot script..."
 
 if [ -f "$UBOOT_MAKEFILE" ]; then
-    # 策略：直接在文件末尾找到 Build/InstallDev 的定义，然后替换其中的 endef
-    # 使用 perl 进行替换，因为它对多行和特殊字符的处理比 sed 更稳健
+    # 策略：使用 sed 在 endef 前插入命令
+    # 注意：我们使用单引号 '...' 包裹 sed 命令，这样里面的 $(...) 不会被 Shell 解析
+    # Makefile 需要 Tab 缩进，这里用 \t 表示
     
-    perl -i -0777 -pe 's/define Build\/InstallDev(.*?)endef/define Build\/InstallDev\1\t# Patch: Clone boot.scr for Tronlong\n\t$(CP) $(STAGING_DIR_IMAGE)\/$(BUILD_DEVICES)-boot.scr $(STAGING_DIR_IMAGE)\/tronlong_tlt113-minievm-boot.scr\nendef/s' "$UBOOT_MAKEFILE"
+    sed -i "/define Build\/InstallDev/,/endef/ s|endef|\t# Patch for Tronlong\n\t\$(CP) \$(STAGING_DIR_IMAGE)/\$(BUILD_DEVICES)-boot.scr \$(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-boot.scr\nendef|" "$UBOOT_MAKEFILE"
     
-    # 再次检查是否修改成功
+    # 验证 Patch 是否写入 (检查是否包含 CP 命令)
     if grep -q "tronlong_tlt113-minievm-boot.scr" "$UBOOT_MAKEFILE"; then
         echo "  -> Success: U-Boot Makefile patched successfully."
+        # 输出最后几行确认内容正确
+        tail -n 10 "$UBOOT_MAKEFILE"
     else
-        echo "  -> Error: Failed to patch U-Boot Makefile! Dumping content for debug..."
-        tail -n 20 "$UBOOT_MAKEFILE"
+        echo "  -> Error: Failed to patch U-Boot Makefile!"
         exit 1
     fi
 else

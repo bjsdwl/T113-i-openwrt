@@ -1,13 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-#
-# File: .github/workflows/openwrt-bulder.yml
-# Description: Build OpenWrt using GitHub Actions
-#
-# Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
+# Description: Build OpenWrt using GitHub Actions (Debug Mode)
 #
 
 name: OpenWrt Builder
@@ -43,7 +36,7 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        # ⚠️ 关键修改：在下面这行末尾添加了 u-boot-tools
+        # 记得加上 u-boot-tools，虽然这次只取证，但保持环境一致
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
@@ -98,6 +91,49 @@ jobs:
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    # ==================================================================================
+    # 🔍 核心取证步骤 (Collect Debug Evidence)
+    # 无论编译成功或失败，这一步都会执行
+    # ==================================================================================
+    - name: Collect Debug Evidence
+      if: always()
+      run: |
+        cd openwrt
+        mkdir -p debug_evidence
+        
+        echo "=== 1. U-Boot Makefile ===" > debug_evidence/log.txt
+        # 复制 U-Boot Makefile
+        if [ -f "package/boot/uboot-sunxi/Makefile" ]; then
+          cp package/boot/uboot-sunxi/Makefile debug_evidence/uboot_makefile.txt
+          echo "uboot_makefile.txt copied." >> debug_evidence/log.txt
+        else
+          echo "ERROR: package/boot/uboot-sunxi/Makefile NOT FOUND" >> debug_evidence/log.txt
+        fi
+        
+        echo -e "\n=== 2. Image Makefile ===" >> debug_evidence/log.txt
+        # 复制 ImageBuilder Makefile
+        if [ -f "target/linux/sunxi/image/Makefile" ]; then
+          cp target/linux/sunxi/image/Makefile debug_evidence/image_makefile.txt
+          echo "image_makefile.txt copied." >> debug_evidence/log.txt
+        fi
+
+        echo -e "\n=== 3. Searching for boot.scr files ===" >> debug_evidence/log.txt
+        find . -name "*boot.scr" >> debug_evidence/file_list.txt 2>/dev/null || echo "No boot.scr found" >> debug_evidence/file_list.txt
+        
+        echo -e "\n=== 4. Searching for u-boot-with-spl.bin files ===" >> debug_evidence/log.txt
+        find . -name "*u-boot-with-spl.bin" >> debug_evidence/file_list.txt 2>/dev/null || echo "No bin found" >> debug_evidence/file_list.txt
+        
+        echo -e "\n=== 5. Listing staging_dir image contents ===" >> debug_evidence/log.txt
+        ls -R staging_dir/target-*/image/ >> debug_evidence/staging_dir_list.txt 2>/dev/null || echo "staging_dir image dir not found" >> debug_evidence/log.txt
+
+    - name: Upload Debug Artifacts
+      uses: actions/upload-artifact@main
+      if: always()
+      with:
+        name: debug-evidence-files
+        path: openwrt/debug_evidence/
+    # ==================================================================================
 
     - name: Check space usage
       if: (!cancelled())

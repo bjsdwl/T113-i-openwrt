@@ -3,8 +3,7 @@
 
 /* 
  * ============================================================================
- * 第一部分：宏定义 (Macros)
- * 集中定义所有需要的常量，无需引用外部头文件
+ * 第一部分：宏定义 (Macros) - 纯数字硬编码，无依赖
  * ============================================================================
  */
 
@@ -24,7 +23,6 @@
 #define CLK_CPUX 0
 #define CLK_APB1 13
 #define CLK_LOSC 0
-
 #define CLK_BUS_UART0 62
 #define CLK_BUS_UART2 64
 #define CLK_BUS_UART4 66
@@ -77,23 +75,18 @@
 #define RST_USB_PHY0 40
 #define RST_USB_PHY1 41
 
-
 /* ============================================================================
- * 第二部分：SoC 基础定义 (CPU & 外设)
- * 整合了 sun8i-t113s.dtsi 和 sun20i-d1s.dtsi 的内容
+ * 第二部分：SoC 基础定义
  * ============================================================================
  */
-
 / {
 	#address-cells = <1>;
 	#size-cells = <1>;
 	interrupt-parent = <&gic>;
 
-	/* CPU 定义 */
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
-
 		cpu0: cpu@0 {
 			compatible = "arm,cortex-a7";
 			device_type = "cpu";
@@ -102,7 +95,6 @@
 			clock-names = "cpu";
 			operating-points-v2 = <&cpu_opp_table>;
 		};
-
 		cpu1: cpu@1 {
 			compatible = "arm,cortex-a7";
 			device_type = "cpu";
@@ -123,7 +115,6 @@
 		opp-1200000000 { opp-hz = /bits/ 64 <1200000000>; opp-microvolt = <1000000>; };
 	};
 
-	/* 时钟源 */
 	osc24M: osc24M_clk {
 		#clock-cells = <0>;
 		compatible = "fixed-clock";
@@ -138,7 +129,6 @@
 		clock-output-names = "osc32k";
 	};
 
-	/* SoC 外设控制器 */
 	soc {
 		compatible = "simple-bus";
 		#address-cells = <1>;
@@ -199,8 +189,6 @@
 			resets = <&ccu RST_BUS_UART0>;
 			status = "disabled";
 		};
-		
-		/* 预留其他UART节点，省略以精简 */
 
 		i2c0: i2c@2502000 {
 			compatible = "allwinner,sun20i-d1-i2c", "allwinner,sun8i-v536-i2c";
@@ -262,7 +250,7 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 		};
-		
+
 		mmc2: mmc@4022000 {
 			compatible = "allwinner,sun20i-d1-mmc", "allwinner,sun7i-a20-mmc";
 			reg = <0x04022000 0x1000>;
@@ -322,7 +310,7 @@
 			phy-names = "usb";
 			status = "disabled";
 		};
-		
+
 		ehci1: usb@4200800 {
 			compatible = "allwinner,sun20i-d1-ehci", "generic-ehci";
 			reg = <0x04200800 0x100>;
@@ -383,10 +371,12 @@
 			ports {
 				#address-cells = <1>;
 				#size-cells = <0>;
+
 				tcon_lcd0_in: port@0 {
 					reg = <0>;
 					tcon_lcd0_in_display_engine: endpoint { remote-endpoint = <&display_engine_out_tcon0>; };
 				};
+
 				tcon_lcd0_out: port@1 {
 					reg = <1>;
 					tcon_lcd0_out_dsi: endpoint { remote-endpoint = <&dsi_in_tcon_lcd0>; };
@@ -394,6 +384,10 @@
 			};
 		};
 
+		/* 
+		 * ⚠️ 关键修正：添加 DSI 输出端口定义
+		 * 之前的报错是因为缺少 port@1，导致 LT8912 无法连接
+		 */
 		dsi: dsi@5450000 {
 			compatible = "allwinner,sun20i-d1-mipi-dsi";
 			reg = <0x05450000 0x1000>;
@@ -404,12 +398,23 @@
 			phys = <&dphy>;
 			phy-names = "dphy";
 			status = "disabled";
+
 			ports {
 				#address-cells = <1>;
 				#size-cells = <0>;
+
+				/* Input from TCON */
 				dsi_in: port@0 {
 					reg = <0>;
 					dsi_in_tcon_lcd0: endpoint { remote-endpoint = <&tcon_lcd0_out_dsi>; };
+				};
+				
+				/* Output to Bridge (LT8912) */
+				dsi_out: port@1 {
+					reg = <1>;
+					dsi_out_bridge: endpoint { 
+						/* 这里留空，由板级定义连接 */
+					};
 				};
 			};
 		};
@@ -428,8 +433,7 @@
 
 
 /* ============================================================================
- * 第三部分：板级配置 (Board Specifics)
- * 适配 Tronlong MiniEVM
+ * 第三部分：板级配置 (Tronlong TLT113-MiniEVM)
  * ============================================================================
  */
 
@@ -611,13 +615,22 @@
 		ports {
 			#address-cells = <1>;
 			#size-cells = <0>;
+			
+			/* Input from DSI */
 			port@0 {
 				reg = <0>;
-				lt8912_in: endpoint { remote-endpoint = <&dsi_out_bridge>; };
+				lt8912_in: endpoint {
+					/* 这里连接到我们在 dsi 节点里定义的 dsi_out_bridge */
+					remote-endpoint = <&dsi_out_bridge>;
+				};
 			};
+			
+			/* Output to HDMI Connector */
 			port@1 {
 				reg = <1>;
-				lt8912_out: endpoint { remote-endpoint = <&hdmi_con_in>; };
+				lt8912_out: endpoint {
+					remote-endpoint = <&hdmi_con_in>;
+				};
 			};
 		};
 	};

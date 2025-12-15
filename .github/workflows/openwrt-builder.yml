@@ -195,3 +195,37 @@ jobs:
         delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # ... (在 Compile the firmware 步骤之后) ...
+
+    # ==============================================================================
+    # 📦 抓取核心文件 (zImage + DTB + boot.scr)
+    # ==============================================================================
+    - name: Collect Transplant Files
+      if: always()
+      run: |
+        cd openwrt
+        mkdir -p transplant_pack
+        
+        echo "Collecting files..."
+        
+        # 1. 抓取 boot.scr (我们在 diy-part2.sh 里生成的)
+        cp files/boot.scr transplant_pack/ 2>/dev/null || echo "boot.scr missing"
+        
+        # 2. 抓取 zImage (内核)
+        # 在 bin 目录或者 build_dir 里找
+        find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_pack/zImage \; 2>/dev/null
+        
+        # 3. 抓取 DTB (设备树)
+        # 直接去编译目录抓原始生成的 dtb，名字最准确
+        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_pack/ \; 2>/dev/null
+        
+        # 验证文件是否收集齐了
+        ls -lh transplant_pack/
+
+    - name: Upload Transplant Pack
+      uses: actions/upload-artifact@main
+      if: always()
+      with:
+        name: manual_update_pack
+        path: openwrt/transplant_pack/
+    # ==============================================================================

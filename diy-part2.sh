@@ -1,5 +1,5 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (20MB U-Boot + Partition Fix)
+# Description: OpenWrt DIY script part 2 (Final Fix: mkdir before cp)
 
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
@@ -7,21 +7,15 @@ KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
 GEN_IMAGE_SCRIPT="target/linux/sunxi/image/gen_sunxi_sdcard_img.sh"
 
 echo "-------------------------------------------------------"
-echo "Starting DIY Part 2: Tronlong TLT113 (20MB Edition)"
+echo "Starting DIY Part 2: Tronlong TLT113 (Mkdir Fix)"
 echo "-------------------------------------------------------"
 
 # ==============================================================================
-# 1. 检查 20MB 文件 (必须存在)
+# 1. 检查 20MB 文件
 # ==============================================================================
 if [ ! -f "files/u-boot-sunxi-with-spl.bin" ]; then
     echo "❌ Error: files/u-boot-sunxi-with-spl.bin NOT FOUND!"
     exit 1
-fi
-# 简单检查大小，确保是那个大文件
-FILE_SIZE=$(stat -c%s "files/u-boot-sunxi-with-spl.bin")
-if [ "$FILE_SIZE" -lt 2000000 ]; then
-    echo "⚠️ Warning: The uploaded U-Boot file seems small (<2MB)."
-    echo "   Ensure you uploaded the 20MB version!"
 fi
 
 # ==============================================================================
@@ -57,10 +51,9 @@ if [ ! -f "files/boot.scr" ]; then
 fi
 
 # ==============================================================================
-# 4. [关键] 修改分区起始位置 (给 20MB U-Boot 让路)
+# 4. 修改分区偏移 (适配 20MB U-Boot)
 # ==============================================================================
 if [ -f "$GEN_IMAGE_SCRIPT" ]; then
-    # 将 -l 1024 (512KB) 改为 -l 65536 (32MB)
     sed -i 's/-l 1024/-l 65536/g' "$GEN_IMAGE_SCRIPT"
     echo "  -> Success: Partition start moved to 32MB."
 else
@@ -69,16 +62,15 @@ else
 fi
 
 # ==============================================================================
-# 5. [核心] 注入机型 & 文件复制钩子
+# 5. [核心] 注入机型 (增加目录创建命令)
 # ==============================================================================
-# 这里的逻辑是：
-# 1. 定义一个 Build 命令 'install-tronlong-files'，负责把文件复制到位
-# 2. 在 Device 定义中，把这个命令加入到 IMAGE/sdcard.img.gz 的生成链中
 
 cat <<EOF >> "$TARGET_MK"
 
 # 定义复制文件的构建步骤
+# ⚠️ 修复：先创建目录 $(INSTALL_DIR)，再复制文件
 define Build/install-tronlong-files
+	\$(INSTALL_DIR) \$(STAGING_DIR_IMAGE)
 	\$(CP) \$(TOPDIR)/files/u-boot-sunxi-with-spl.bin \$(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-u-boot-with-spl.bin
 	\$(CP) \$(TOPDIR)/files/boot.scr \$(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-boot.scr
 endef
@@ -88,11 +80,9 @@ define Device/tronlong_tlt113-minievm
   DEVICE_VENDOR := Tronlong
   DEVICE_MODEL := TLT113-MiniEVM (20MB U-Boot)
   DEVICE_DTS := $DTS_NAME
-  
-  # 借用 nanopi_neo 通过编译检查
   DEVICE_UBOOT := nanopi_neo
   
-  # 自定义打包流程：先复制文件，再打包
+  # 调用上面的自定义安装命令
   IMAGE/sdcard.img.gz := \\
       install-tronlong-files | \\
       sunxi-sdcard | append-metadata | gzip
@@ -102,5 +92,4 @@ endef
 TARGET_DEVICES += tronlong_tlt113-minievm
 EOF
 
-echo "  -> Success: Device definition appended."
 echo "DIY Part 2 Finished Successfully."

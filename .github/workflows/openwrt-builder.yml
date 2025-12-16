@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt using GitHub Actions (Debug Mode)
+# Description: Build OpenWrt using GitHub Actions (Transplant Mode)
 #
 
 name: OpenWrt Builder
@@ -36,7 +36,7 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        # 记得加上 u-boot-tools，虽然这次只取证，但保持环境一致
+        # 必须安装 u-boot-tools 用于生成 boot.scr
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
@@ -92,48 +92,39 @@ jobs:
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    # ==================================================================================
-    # 🔍 核心取证步骤 (Collect Debug Evidence)
-    # 无论编译成功或失败，这一步都会执行
-    # ==================================================================================
-    - name: Collect Debug Evidence
+    # ==============================================================================
+    # 📦 抓取核心文件 (zImage + DTB + boot.scr + rootfs)
+    # ==============================================================================
+    - name: Collect Transplant Files
       if: always()
       run: |
         cd openwrt
-        mkdir -p debug_evidence
+        mkdir -p transplant_pack
         
-        echo "=== 1. U-Boot Makefile ===" > debug_evidence/log.txt
-        # 复制 U-Boot Makefile
-        if [ -f "package/boot/uboot-sunxi/Makefile" ]; then
-          cp package/boot/uboot-sunxi/Makefile debug_evidence/uboot_makefile.txt
-          echo "uboot_makefile.txt copied." >> debug_evidence/log.txt
-        else
-          echo "ERROR: package/boot/uboot-sunxi/Makefile NOT FOUND" >> debug_evidence/log.txt
-        fi
+        echo "Collecting files..."
         
-        echo -e "\n=== 2. Image Makefile ===" >> debug_evidence/log.txt
-        # 复制 ImageBuilder Makefile
-        if [ -f "target/linux/sunxi/image/Makefile" ]; then
-          cp target/linux/sunxi/image/Makefile debug_evidence/image_makefile.txt
-          echo "image_makefile.txt copied." >> debug_evidence/log.txt
-        fi
+        # 1. 抓取 boot.scr
+        cp files/boot.scr transplant_pack/ 2>/dev/null || echo "boot.scr missing"
+        
+        # 2. 抓取 zImage (内核)
+        find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_pack/zImage \; 2>/dev/null
+        
+        # 3. 抓取 DTB (设备树)
+        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_pack/ \; 2>/dev/null
+        
+        # 4. 抓取文件系统 (rootfs.tar.gz)
+        find bin/targets/sunxi/cortexa7/ -name "*-rootfs.tar.gz" -exec cp {} transplant_pack/rootfs.tar.gz \; 2>/dev/null
+        
+        # 验证文件是否收集齐了
+        ls -lh transplant_pack/
 
-        echo -e "\n=== 3. Searching for boot.scr files ===" >> debug_evidence/log.txt
-        find . -name "*boot.scr" >> debug_evidence/file_list.txt 2>/dev/null || echo "No boot.scr found" >> debug_evidence/file_list.txt
-        
-        echo -e "\n=== 4. Searching for u-boot-with-spl.bin files ===" >> debug_evidence/log.txt
-        find . -name "*u-boot-with-spl.bin" >> debug_evidence/file_list.txt 2>/dev/null || echo "No bin found" >> debug_evidence/file_list.txt
-        
-        echo -e "\n=== 5. Listing staging_dir image contents ===" >> debug_evidence/log.txt
-        ls -R staging_dir/target-*/image/ >> debug_evidence/staging_dir_list.txt 2>/dev/null || echo "staging_dir image dir not found" >> debug_evidence/log.txt
-
-    - name: Upload Debug Artifacts
+    - name: Upload Transplant Pack
       uses: actions/upload-artifact@main
       if: always()
       with:
-        name: debug-evidence-files
-        path: openwrt/debug_evidence/
-    # ==================================================================================
+        name: OpenWrt_Transplant_Kit
+        path: openwrt/transplant_pack/
+    # ==============================================================================
 
     - name: Check space usage
       if: (!cancelled())
@@ -195,37 +186,3 @@ jobs:
         delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  # ... (在 Compile the firmware 步骤之后) ...
-
-    # ==============================================================================
-    # 📦 抓取核心文件 (zImage + DTB + boot.scr)
-    # ==============================================================================
-    - name: Collect Transplant Files
-      if: always()
-      run: |
-        cd openwrt
-        mkdir -p transplant_pack
-        
-        echo "Collecting files..."
-        
-        # 1. 抓取 boot.scr (我们在 diy-part2.sh 里生成的)
-        cp files/boot.scr transplant_pack/ 2>/dev/null || echo "boot.scr missing"
-        
-        # 2. 抓取 zImage (内核)
-        # 在 bin 目录或者 build_dir 里找
-        find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_pack/zImage \; 2>/dev/null
-        
-        # 3. 抓取 DTB (设备树)
-        # 直接去编译目录抓原始生成的 dtb，名字最准确
-        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_pack/ \; 2>/dev/null
-        
-        # 验证文件是否收集齐了
-        ls -lh transplant_pack/
-
-    - name: Upload Transplant Pack
-      uses: actions/upload-artifact@main
-      if: always()
-      with:
-        name: manual_update_pack
-        path: openwrt/transplant_pack/
-    # ==============================================================================

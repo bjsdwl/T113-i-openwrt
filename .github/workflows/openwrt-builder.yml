@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt & Auto-Package Transplant Kit
+# Description: Build OpenWrt & Upload Transplant Kit to Artifacts
 #
 
 name: OpenWrt Builder
@@ -17,8 +17,10 @@ env:
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
+  # 既然只想要 Transplant Kit，这个也可以关掉，或者留着作为备份
+  UPLOAD_FIRMWARE: false
+  # 关闭 Release 上传
+  UPLOAD_RELEASE: false
   TZ: Asia/Shanghai
 
 jobs:
@@ -36,7 +38,7 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        # 必须安装 u-boot-tools 用于生成 boot.scr
+        # 安装 u-boot-tools 用于生成 boot.scr
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
@@ -93,7 +95,7 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     # ==============================================================================
-    # 📦 智能打包 Transplant Kit (核心步骤)
+    # 📦 智能打包 Transplant Kit (只保留这部分上传)
     # ==============================================================================
     - name: Package Transplant Kit
       if: steps.compile.outputs.status == 'success'
@@ -108,57 +110,59 @@ jobs:
         if [ -f "$ROOTFS_TAR" ]; then
             echo "✅ Found rootfs: $ROOTFS_TAR"
             
-            # 1. 复制一份 rootfs.tar.gz 到输出目录 (作为文件系统源)
+            # 1. 复制 rootfs.tar.gz (Tina 打包需要)
             cp "$ROOTFS_TAR" transplant_kit/rootfs.tar.gz
             
-            # 2. 解压提取核心文件 (zImage, dtb, boot.scr)
-            echo "📦 Extracting kernel and dtb from tarball..."
+            # 2. 解压提取核心文件
+            echo "📦 Extracting components..."
             tar -xzf "$ROOTFS_TAR" -C temp_extract/
             
             # 3. 提取并重命名 - 内核 (zImage -> bImage)
+            # 优先从解压目录找，找不到去 bin 目录找
             if [ -f temp_extract/boot/zImage ]; then
                 cp temp_extract/boot/zImage transplant_kit/bImage
-                echo "  -> Extracted: bImage (from zImage)"
+                echo "  -> Extracted: bImage (from boot/zImage)"
             elif [ -f temp_extract/zImage ]; then
                 cp temp_extract/zImage transplant_kit/bImage
                 echo "  -> Extracted: bImage"
             else
-                # 如果 tar 包里没有，去 bin 目录找
                 find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_kit/bImage \;
-                echo "  -> Extracted: bImage (fallback)"
+                echo "  -> Extracted: bImage (fallback search)"
             fi
 
             # 4. 提取并重命名 - 设备树 (dtb -> sunxi.dtb)
-            # 查找以 sun8i 开头 .dtb 结尾的文件
             DTB_FILE=$(find temp_extract/ -name "sun8i*.dtb" | head -n 1)
             if [ -f "$DTB_FILE" ]; then
                 cp "$DTB_FILE" transplant_kit/sunxi.dtb
                 echo "  -> Extracted: sunxi.dtb (from $(basename $DTB_FILE))"
             else
-                # fallback
+                # Fallback: 去 build_dir 找
                 find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_kit/sunxi.dtb \;
-                echo "  -> Extracted: sunxi.dtb (fallback)"
+                echo "  -> Extracted: sunxi.dtb (fallback search)"
             fi
             
             # 5. 提取 boot.scr
-            if [ -f temp_extract/boot/boot.scr ]; then
-                cp temp_extract/boot/boot.scr transplant_kit/
-            elif [ -f temp_extract/boot.scr ]; then
-                cp temp_extract/boot.scr transplant_kit/
-            else
+            # 优先用 files 里的源文件，或者从包里解压的
+            if [ -f files/boot.scr ]; then
                 cp files/boot.scr transplant_kit/
+                echo "  -> Included: boot.scr (from files/)"
+            elif [ -f temp_extract/boot/boot.scr ]; then
+                cp temp_extract/boot/boot.scr transplant_kit/
+                echo "  -> Extracted: boot.scr (from rootfs)"
             fi
-            echo "  -> Extracted: boot.scr"
 
         else
             echo "❌ Error: rootfs.tar.gz not found!"
-            exit 1
+            # 备用方案：只拷贝找到的内核和DTB
+            find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_kit/bImage \;
+            find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_kit/sunxi.dtb \;
+            cp files/boot.scr transplant_kit/ 2>/dev/null
         fi
 
         # 清理临时文件
         rm -rf temp_extract
 
-        echo "=== Transplant Kit Contents ==="
+        echo "=== Transplant Kit Contents (Ready for Tina) ==="
         ls -lh transplant_kit/
 
     - name: Upload Transplant Kit
@@ -169,63 +173,8 @@ jobs:
         path: openwrt/transplant_kit/
     # ==============================================================================
 
-    - name: Check space usage
-      if: (!cancelled())
-      run: df -hT
-
-    - name: Upload bin directory
-      uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
-
-    - name: Organize files
-      id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
-      run: |
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: Upload firmware directory
-      uses: actions/upload-artifact@main
-      if: steps.organize.outputs.status == 'success' && !cancelled()
-      with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
-
-    - name: Generate release tag
-      id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
-        [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: Upload firmware to release
-      uses: softprops/action-gh-release@master
-      if: steps.tag.outputs.status == 'success' && !cancelled()
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
-
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
       with:
         retain_days: 0
         keep_minimum_runs: 2
-
-    - name: Remove old Releases
-      uses: dev-drprasad/delete-older-releases@master
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-        keep_latest: 3
-        delete_tags: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

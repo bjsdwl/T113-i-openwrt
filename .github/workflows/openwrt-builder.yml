@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt & Upload Transplant Kit to Artifacts
+# Description: Build OpenWrt & Auto-Package Ready-to-use Transplant Kit
 #
 
 name: OpenWrt Builder
@@ -17,10 +17,8 @@ env:
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   UPLOAD_BIN_DIR: false
-  # 既然只想要 Transplant Kit，这个也可以关掉，或者留着作为备份
-  UPLOAD_FIRMWARE: false
-  # 关闭 Release 上传
-  UPLOAD_RELEASE: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
 jobs:
@@ -95,83 +93,77 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     # ==============================================================================
-    # 📦 智能打包 Transplant Kit (只保留这部分上传)
+    # 📦 收集 Tina SDK 所需文件 (自动解压 + 重命名)
     # ==============================================================================
-    - name: Package Transplant Kit
+    - name: Collect Tina Transplant Files
       if: steps.compile.outputs.status == 'success'
       run: |
         cd openwrt
-        mkdir -p transplant_kit
-        mkdir -p temp_extract
+        mkdir -p tina_files
         
-        echo "🔍 Locating rootfs.tar.gz..."
-        ROOTFS_TAR=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.tar.gz" | head -n 1)
+        echo "Collecting and preparing files..."
         
-        if [ -f "$ROOTFS_TAR" ]; then
-            echo "✅ Found rootfs: $ROOTFS_TAR"
-            
-            # 1. 复制 rootfs.tar.gz (Tina 打包需要)
-            cp "$ROOTFS_TAR" transplant_kit/rootfs.tar.gz
-            
-            # 2. 解压提取核心文件
-            echo "📦 Extracting components..."
-            tar -xzf "$ROOTFS_TAR" -C temp_extract/
-            
-            # 3. 提取并重命名 - 内核 (zImage -> bImage)
-            # 优先从解压目录找，找不到去 bin 目录找
-            if [ -f temp_extract/boot/zImage ]; then
-                cp temp_extract/boot/zImage transplant_kit/bImage
-                echo "  -> Extracted: bImage (from boot/zImage)"
-            elif [ -f temp_extract/zImage ]; then
-                cp temp_extract/zImage transplant_kit/bImage
-                echo "  -> Extracted: bImage"
-            else
-                find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_kit/bImage \;
-                echo "  -> Extracted: bImage (fallback search)"
-            fi
-
-            # 4. 提取并重命名 - 设备树 (dtb -> sunxi.dtb)
-            DTB_FILE=$(find temp_extract/ -name "sun8i*.dtb" | head -n 1)
-            if [ -f "$DTB_FILE" ]; then
-                cp "$DTB_FILE" transplant_kit/sunxi.dtb
-                echo "  -> Extracted: sunxi.dtb (from $(basename $DTB_FILE))"
-            else
-                # Fallback: 去 build_dir 找
-                find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_kit/sunxi.dtb \;
-                echo "  -> Extracted: sunxi.dtb (fallback search)"
-            fi
-            
-            # 5. 提取 boot.scr
-            # 优先用 files 里的源文件，或者从包里解压的
-            if [ -f files/boot.scr ]; then
-                cp files/boot.scr transplant_kit/
-                echo "  -> Included: boot.scr (from files/)"
-            elif [ -f temp_extract/boot/boot.scr ]; then
-                cp temp_extract/boot/boot.scr transplant_kit/
-                echo "  -> Extracted: boot.scr (from rootfs)"
-            fi
-
+        # 1. 引导脚本
+        cp files/boot.scr tina_files/ 2>/dev/null || echo "boot.scr missing"
+        
+        # 2. 内核 (zImage -> bImage)
+        find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} tina_files/bImage \; 2>/dev/null
+        
+        # 3. 设备树 (dtb -> sunxi.dtb)
+        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} tina_files/sunxi.dtb \; 2>/dev/null
+        
+        # 4. 文件系统 (自动解压 rootfs.ext4.gz -> rootfs.ext4)
+        # 找到压缩包
+        ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" | head -n 1)
+        
+        if [ -f "$ROOTFS_GZ" ]; then
+            echo "Found compressed rootfs: $ROOTFS_GZ"
+            # 复制并解压
+            cp "$ROOTFS_GZ" tina_files/rootfs.ext4.gz
+            gzip -d tina_files/rootfs.ext4.gz
+            echo "  -> Decompressed to: rootfs.ext4"
         else
-            echo "❌ Error: rootfs.tar.gz not found!"
-            # 备用方案：只拷贝找到的内核和DTB
-            find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_kit/bImage \;
-            find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_kit/sunxi.dtb \;
-            cp files/boot.scr transplant_kit/ 2>/dev/null
+            echo "❌ Error: rootfs.ext4.gz not found! Did you enable CONFIG_TARGET_ROOTFS_EXT4FS?"
         fi
+        
+        # 验证最终文件列表
+        echo "=== Transplant Kit Content ==="
+        ls -lh tina_files/
 
-        # 清理临时文件
-        rm -rf temp_extract
-
-        echo "=== Transplant Kit Contents (Ready for Tina) ==="
-        ls -lh transplant_kit/
-
-    - name: Upload Transplant Kit
+    - name: Upload Tina Transplant Kit
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success'
       with:
         name: OpenWrt_Transplant_Kit
-        path: openwrt/transplant_kit/
+        path: openwrt/tina_files/
     # ==============================================================================
+
+    - name: Check space usage
+      if: (!cancelled())
+      run: df -hT
+
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: openwrt/bin
+
+    - name: Organize files
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main

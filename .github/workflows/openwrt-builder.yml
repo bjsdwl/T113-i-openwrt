@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt using GitHub Actions (Transplant Mode)
+# Description: Build OpenWrt using GitHub Actions (Transplant Edition)
 #
 
 name: OpenWrt Builder
@@ -93,37 +93,50 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     # ==============================================================================
-    # 📦 抓取核心文件 (zImage + DTB + boot.scr + rootfs)
+    # 📦 核心步骤：抓取移花接木所需文件
     # ==============================================================================
-    - name: Collect Transplant Files
-      if: always()
+    - name: Collect Transplant Artifacts
+      if: steps.compile.outputs.status == 'success'
       run: |
         cd openwrt
-        mkdir -p transplant_pack
+        mkdir -p transplant_kit
         
-        echo "Collecting files..."
+        echo "Collecting files for Tina SDK injection..."
         
         # 1. 抓取 boot.scr
-        cp files/boot.scr transplant_pack/ 2>/dev/null || echo "boot.scr missing"
+        cp files/boot.scr transplant_kit/ 2>/dev/null || echo "boot.scr missing"
         
         # 2. 抓取 zImage (内核)
-        find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_pack/zImage \; 2>/dev/null
+        # find 命令会自动查找 bin 目录下的 zImage
+        find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_kit/zImage \;
         
         # 3. 抓取 DTB (设备树)
-        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_pack/ \; 2>/dev/null
+        # 查找我们编译出的特定 dtb
+        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_kit/ \;
         
-        # 4. 抓取文件系统 (rootfs.tar.gz)
-        find bin/targets/sunxi/cortexa7/ -name "*-rootfs.tar.gz" -exec cp {} transplant_pack/rootfs.tar.gz \; 2>/dev/null
+        # 4. 抓取并解压 Rootfs (文件系统)
+        # 查找 ext4.gz
+        ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" | head -n 1)
+        if [ -n "$ROOTFS_GZ" ]; then
+            echo "Found rootfs: $ROOTFS_GZ"
+            cp "$ROOTFS_GZ" transplant_kit/rootfs.ext4.gz
+            # 解压出 rootfs.ext4，方便你直接使用
+            gzip -d -k transplant_kit/rootfs.ext4.gz
+        else
+            echo "Warning: rootfs.ext4.gz not found!"
+        fi
         
-        # 验证文件是否收集齐了
-        ls -lh transplant_pack/
+        # 5. 抓取 tar.gz Rootfs (备用，方便解压修改)
+        find bin/targets/sunxi/cortexa7/ -name "*rootfs.tar.gz" -exec cp {} transplant_kit/ \;
+        
+        ls -lh transplant_kit/
 
-    - name: Upload Transplant Pack
+    - name: Upload Transplant Kit
       uses: actions/upload-artifact@main
-      if: always()
+      if: steps.compile.outputs.status == 'success'
       with:
-        name: OpenWrt_Transplant_Kit
-        path: openwrt/transplant_pack/
+        name: Tina_Transplant_Files
+        path: openwrt/transplant_kit/
     # ==============================================================================
 
     - name: Check space usage

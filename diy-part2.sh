@@ -1,28 +1,37 @@
 #!/bin/bash
-# Description: OpenWrt DIY script part 2 (Tina Transplant Preparation)
+# Description: OpenWrt DIY script part 2 (Fix DTS Phandle Error)
 
-# 1. 定义变量
+# 变量定义
 DTS_FILENAME="sun8i-t113-tronlong-minievm.dts"
 DTS_NAME="sun8i-t113-tronlong-minievm"
 TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
 KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
+IMAGE_MAKEFILE="target/linux/sunxi/image/Makefile"
 
 echo "-------------------------------------------------------"
-echo "Starting DIY Part 2: Generating Files for Tina SDK"
+echo "Starting DIY Part 2: Fix DTS Structure"
 echo "-------------------------------------------------------"
 
-# 2. 准备目录
+# ==============================================================================
+# 1. 检查必要文件
+# ==============================================================================
+if [ ! -f "files/u-boot-sunxi-with-spl.bin" ]; then
+    echo "❌ Error: files/u-boot-sunxi-with-spl.bin NOT FOUND!"
+    exit 1
+fi
+
+# ==============================================================================
+# 2. 部署单体 DTS 文件 (结构重构：分离定义与连接)
+# ==============================================================================
+echo "[1/4] Generating & Deploying DTS..."
 mkdir -p "$KERNEL_DTS_DIR"
 mkdir -p target/linux/sunxi/dts
-mkdir -p files
 
-# 3. 生成单体 DTS 文件 (包含所有宏定义，无依赖)
-echo "  -> Generating Monolithic DTS..."
 cat <<EOF > "files/$DTS_FILENAME"
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 /dts-v1/;
 
-/* === 宏定义 (硬编码) === */
+/* === 宏定义 === */
 #define GIC_SPI 0
 #define GIC_PPI 1
 #define IRQ_TYPE_LEVEL_HIGH 4
@@ -35,7 +44,6 @@ cat <<EOF > "files/$DTS_FILENAME"
 #define CLK_CPUX 0
 #define CLK_APB1 13
 #define CLK_LOSC 0
-/* 外设时钟映射 */
 #define CLK_BUS_UART0 62
 #define CLK_BUS_I2C0 68
 #define CLK_BUS_I2C2 70
@@ -59,7 +67,6 @@ cat <<EOF > "files/$DTS_FILENAME"
 #define CLK_TCON_LCD0 112
 #define CLK_MIPI_DSI 110
 
-/* 复位映射 */
 #define RST_BUS_UART0 18
 #define RST_BUS_I2C0 24
 #define RST_BUS_I2C2 26
@@ -72,17 +79,16 @@ cat <<EOF > "files/$DTS_FILENAME"
 #define RST_BUS_EHCI1 45
 #define RST_BUS_TCON_LCD0 52
 #define RST_BUS_DE 1
-#define RST_BUS_LVDS0 54
 #define RST_BUS_MIPI_DSI 51
 #define RST_USB_PHY0 40
 #define RST_USB_PHY1 41
 
 / {
+	model = "Tronlong TLT113-MiniEVM (NAND/HDMI)";
+	compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113s", "allwinner,sun8i";
 	#address-cells = <1>;
 	#size-cells = <1>;
 	interrupt-parent = <&gic>;
-	model = "Tronlong TLT113-MiniEVM (NAND/HDMI)";
-	compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113s", "allwinner,sun8i";
 
 	aliases {
 		serial0 = &uart0;
@@ -109,7 +115,9 @@ cat <<EOF > "files/$DTS_FILENAME"
 		compatible = "hdmi-connector";
 		type = "a";
 		ddc-i2c-bus = <&i2c0>;
-		port { hdmi_con_in: endpoint { remote-endpoint = <&lt8912_out>; }; };
+		port { 
+			hdmi_con_in: endpoint { remote-endpoint = <&lt8912_out>; }; 
+		};
 	};
 
 	soc {
@@ -146,13 +154,14 @@ cat <<EOF > "files/$DTS_FILENAME"
 		
 		i2c0: i2c@2502000 { compatible = "allwinner,sun20i-d1-i2c", "allwinner,sun8i-v536-i2c"; reg = <0x02502000 0x400>; interrupts = <GIC_SPI 11 IRQ_TYPE_LEVEL_HIGH>; clocks = <&ccu CLK_BUS_I2C0>; resets = <&ccu RST_BUS_I2C0>; #address-cells = <1>; #size-cells = <0>; status = "okay"; pinctrl-names = "default"; pinctrl-0 = <&i2c0_pins>; };
 		
+		/* 注意：这里只定义节点，不定义端口连接，避免循环引用 */
 		i2c2: i2c@2502800 { 
 			compatible = "allwinner,sun20i-d1-i2c", "allwinner,sun8i-v536-i2c"; reg = <0x02502800 0x400>; interrupts = <GIC_SPI 13 IRQ_TYPE_LEVEL_HIGH>; clocks = <&ccu CLK_BUS_I2C2>; resets = <&ccu RST_BUS_I2C2>; #address-cells = <1>; #size-cells = <0>; status = "okay"; pinctrl-names = "default"; pinctrl-0 = <&i2c2_pins>; 
 			lt8912@48 {
 				compatible = "lontium,lt8912b"; reg = <0x48>; reset-gpios = <&pio 4 11 GPIO_ACTIVE_LOW>; 
 				ports {
 					#address-cells = <1>; #size-cells = <0>;
-					port@0 { reg = <0>; lt8912_in: endpoint { remote-endpoint = <&dsi_out_bridge>; }; };
+					port@0 { reg = <0>; lt8912_in: endpoint { }; }; /* 连接在底部定义 */
 					port@1 { reg = <1>; lt8912_out: endpoint { remote-endpoint = <&hdmi_con_in>; }; };
 				};
 			};
@@ -194,19 +203,63 @@ cat <<EOF > "files/$DTS_FILENAME"
 		tcon_lcd0: lcd-controller@5461000 { compatible = "allwinner,sun20i-d1-tcon-lcd"; reg = <0x05461000 0x1000>; interrupts = <GIC_SPI 95 IRQ_TYPE_LEVEL_HIGH>; clocks = <&ccu CLK_BUS_TCON_LCD0>, <&ccu CLK_TCON_LCD0>; clock-names = "ahb", "tcon"; resets = <&ccu RST_BUS_TCON_LCD0>, <&ccu RST_BUS_LVDS0>; reset-names = "lcd", "lvds"; status = "okay";
 			ports { #address-cells = <1>; #size-cells = <0>;
 				tcon_lcd0_in: port@0 { reg = <0>; tcon_lcd0_in_display_engine: endpoint { remote-endpoint = <&display_engine_out_tcon0>; }; };
-				tcon_lcd0_out: port@1 { reg = <1>; tcon_lcd0_out_dsi: endpoint { remote-endpoint = <&dsi_in_tcon_lcd0>; }; };
+				tcon_lcd0_out: port@1 { reg = <1>; tcon_lcd0_out_dsi: endpoint { }; }; /* 连接在底部定义 */
 			};
 		};
+
+		dsi: dsi@5450000 {
+			compatible = "allwinner,sun20i-d1-mipi-dsi";
+			reg = <0x05450000 0x1000>;
+			interrupts = <GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&ccu CLK_BUS_MIPI_DSI>, <&ccu CLK_MIPI_DSI>;
+			clock-names = "bus", "mod";
+			resets = <&ccu RST_BUS_MIPI_DSI>;
+			phys = <&dphy>;
+			phy-names = "dphy";
+			status = "okay";
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+				dsi_in: port@0 {
+					reg = <0>;
+					dsi_in_tcon_lcd0: endpoint { }; /* 连接在底部定义 */
+				};
+				dsi_out: port@1 {
+					reg = <1>;
+					dsi_out_bridge: endpoint { }; /* 连接在底部定义 */
+				};
+			};
+		};
+
+		dphy: d-phy@5460000 { compatible = "allwinner,sun20i-d1-mipi-dphy"; reg = <0x05460000 0x1000>; clocks = <&ccu CLK_BUS_MIPI_DSI>, <&ccu CLK_MIPI_DSI>; clock-names = "bus", "mod"; resets = <&ccu RST_BUS_MIPI_DSI>; status = "okay"; #phy-cells = <0>; };
 	};
 };
+
+/* ============================================================================
+ * 第三部分：外部连接 (Links)
+ * 在所有节点定义完成后，最后进行连接，消除“节点不存在”错误
+ * ============================================================================
+ */
+
+/* TCON 输出 -> DSI 输入 */
+&tcon_lcd0_out_dsi { remote-endpoint = <&dsi_in_tcon_lcd0>; };
+&dsi_in_tcon_lcd0 { remote-endpoint = <&tcon_lcd0_out_dsi>; };
+
+/* DSI 输出 -> LT8912B 输入 */
+&dsi_out_bridge { remote-endpoint = <&lt8912_in>; };
+&lt8912_in { remote-endpoint = <&dsi_out_bridge>; };
+
 EOF
 
-# 4. 部署 DTS (复制到源码树)
-echo "  -> Deploying DTS..."
+# 复制到 Kernel Overlay 和标准目录
 cp "files/$DTS_FILENAME" "$KERNEL_DTS_DIR/"
 cp "files/$DTS_FILENAME" target/linux/sunxi/dts/
+echo "  -> Success: DTS deployed."
 
-# 5. 生成 boot.scr
+
+# ==============================================================================
+# 3. 手动生成 boot.scr
+# ==============================================================================
 echo "  -> Generating boot.scr..."
 cat <<EOF > boot.cmd
 # OpenWrt Boot Script for Tronlong T113
@@ -218,21 +271,57 @@ bootz \${kernel_addr_r} - \${fdt_addr_r}
 EOF
 mkimage -C none -A arm -T script -d boot.cmd files/boot.scr
 
-# 6. 注册机型 (U-Boot 使用 nanopi_neo 占位，避免编译错误)
+if [ ! -f "files/boot.scr" ]; then
+    echo "❌ Error: Failed to generate boot.scr!"
+    exit 1
+fi
+
+# ==============================================================================
+# 4. 修改分区偏移 (32MB Offset)
+# ==============================================================================
+echo "  -> Patching partition alignment..."
+if [ -f "$GEN_IMAGE_SCRIPT" ]; then
+    sed -i 's/-l 1024/-l 65536/g' "$GEN_IMAGE_SCRIPT"
+    echo "  -> Success: Partition start moved to 32MB."
+else
+    echo "❌ Error: gen_sunxi_sdcard_img.sh not found!"
+    exit 1
+fi
+
+# ==============================================================================
+# 5. [核心] 注入机型定义 (流水线强制复制)
+# ==============================================================================
 if [ ! -f "$TARGET_MK" ]; then
     echo "❌ Error: Target Makefile not found!"
     exit 1
 fi
+
 cat <<EOF >> "$TARGET_MK"
+
+# 定义一个构建命令：install-tronlong-files
+# 它的作用是：创建目录 -> 复制 U-Boot -> 复制 boot.scr
+define Build/install-tronlong-files
+	\$(INSTALL_DIR) \$(STAGING_DIR_IMAGE)
+	\$(CP) \$(TOPDIR)/files/u-boot-sunxi-with-spl.bin \$(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-u-boot-with-spl.bin
+	\$(CP) \$(TOPDIR)/files/boot.scr \$(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-boot.scr
+endef
+
 define Device/tronlong_tlt113-minievm
   \$(Device/sunxi-img)
   DEVICE_VENDOR := Tronlong
-  DEVICE_MODEL := TLT113-MiniEVM (Transplant)
+  DEVICE_MODEL := TLT113-MiniEVM (NAND/HDMI)
   DEVICE_DTS := $DTS_NAME
   DEVICE_UBOOT := nanopi_neo
+  
+  # 修改镜像生成流水线
+  IMAGE/sdcard.img.gz := \\
+      install-tronlong-files | \\
+      sunxi-sdcard | append-metadata | gzip
+      
   SUPPORTED_DEVICES := tronlong,tlt113-minievm
 endef
 TARGET_DEVICES += tronlong_tlt113-minievm
 EOF
 
-echo "DIY Part 2 Finished."
+echo "  -> Success: Device definition with pipeline hook injected."
+echo "DIY Part 2 Finished Successfully."

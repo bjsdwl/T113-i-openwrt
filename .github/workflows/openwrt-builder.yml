@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt & Collect Transplant Artifacts
+# Description: Build OpenWrt & Auto-Package Transplant Kit
 #
 
 name: OpenWrt Builder
@@ -36,7 +36,7 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        # ⚠️ 必须安装 u-boot-tools
+        # 必须安装 u-boot-tools 用于生成 boot.scr
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
@@ -93,41 +93,72 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     # ==============================================================================
-    # 📦 收集移花接木所需文件 (Artifacts Collection)
+    # 📦 智能打包 Transplant Kit (核心步骤)
     # ==============================================================================
-    - name: Collect Transplant Kit
+    - name: Package Transplant Kit
       if: steps.compile.outputs.status == 'success'
       run: |
         cd openwrt
         mkdir -p transplant_kit
+        mkdir -p temp_extract
         
-        echo "Collecting files for Tina SDK..."
+        echo "🔍 Locating rootfs.tar.gz..."
+        ROOTFS_TAR=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.tar.gz" | head -n 1)
         
-        # 1. 引导脚本 (boot.scr)
-        cp files/boot.scr transplant_kit/ 2>/dev/null || echo "boot.scr missing"
-        
-        # 2. 内核 (zImage)
-        # 自动查找生成的 zImage
-        find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_kit/zImage \; 2>/dev/null
-        
-        # 3. 设备树 (dtb)
-        # 自动查找 sun8i-t113-tronlong-minievm.dtb
-        # 注意：OpenWrt 可能会把 dtb 放在 image 文件夹或者 build_dir 里
-        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_kit/ \; 2>/dev/null
-        
-        # 4. 文件系统 (rootfs.ext4)
-        # OpenWrt 默认生成 .gz 压缩包，我们找到它并解压
-        EXT4_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" | head -n 1)
-        if [ -n "$EXT4_GZ" ]; then
-            echo "Found rootfs: $EXT4_GZ"
-            cp "$EXT4_GZ" transplant_kit/rootfs.ext4.gz
-            gzip -d transplant_kit/rootfs.ext4.gz
+        if [ -f "$ROOTFS_TAR" ]; then
+            echo "✅ Found rootfs: $ROOTFS_TAR"
+            
+            # 1. 复制一份 rootfs.tar.gz 到输出目录 (作为文件系统源)
+            cp "$ROOTFS_TAR" transplant_kit/rootfs.tar.gz
+            
+            # 2. 解压提取核心文件 (zImage, dtb, boot.scr)
+            echo "📦 Extracting kernel and dtb from tarball..."
+            tar -xzf "$ROOTFS_TAR" -C temp_extract/
+            
+            # 3. 提取并重命名 - 内核 (zImage -> bImage)
+            if [ -f temp_extract/boot/zImage ]; then
+                cp temp_extract/boot/zImage transplant_kit/bImage
+                echo "  -> Extracted: bImage (from zImage)"
+            elif [ -f temp_extract/zImage ]; then
+                cp temp_extract/zImage transplant_kit/bImage
+                echo "  -> Extracted: bImage"
+            else
+                # 如果 tar 包里没有，去 bin 目录找
+                find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_kit/bImage \;
+                echo "  -> Extracted: bImage (fallback)"
+            fi
+
+            # 4. 提取并重命名 - 设备树 (dtb -> sunxi.dtb)
+            # 查找以 sun8i 开头 .dtb 结尾的文件
+            DTB_FILE=$(find temp_extract/ -name "sun8i*.dtb" | head -n 1)
+            if [ -f "$DTB_FILE" ]; then
+                cp "$DTB_FILE" transplant_kit/sunxi.dtb
+                echo "  -> Extracted: sunxi.dtb (from $(basename $DTB_FILE))"
+            else
+                # fallback
+                find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_kit/sunxi.dtb \;
+                echo "  -> Extracted: sunxi.dtb (fallback)"
+            fi
+            
+            # 5. 提取 boot.scr
+            if [ -f temp_extract/boot/boot.scr ]; then
+                cp temp_extract/boot/boot.scr transplant_kit/
+            elif [ -f temp_extract/boot.scr ]; then
+                cp temp_extract/boot.scr transplant_kit/
+            else
+                cp files/boot.scr transplant_kit/
+            fi
+            echo "  -> Extracted: boot.scr"
+
         else
-            echo "Warning: rootfs.ext4.gz not found! (Check .config)"
+            echo "❌ Error: rootfs.tar.gz not found!"
+            exit 1
         fi
 
-        # 5. 验证文件列表
-        echo "=== Transplant Kit Content ==="
+        # 清理临时文件
+        rm -rf temp_extract
+
+        echo "=== Transplant Kit Contents ==="
         ls -lh transplant_kit/
 
     - name: Upload Transplant Kit

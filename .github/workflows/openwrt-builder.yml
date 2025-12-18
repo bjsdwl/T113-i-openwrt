@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt using GitHub Actions (Transplant Edition)
+# Description: Build OpenWrt for Tronlong T113 (Transplant Mode)
 #
 
 name: OpenWrt Builder
@@ -36,7 +36,7 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        # 必须安装 u-boot-tools 用于生成 boot.scr
+        # 安装 u-boot-tools 用于生成 boot.scr
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
@@ -93,49 +93,40 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     # ==============================================================================
-    # 📦 核心步骤：抓取移花接木所需文件
+    # 📦 收集移花接木所需文件 (Artifacts Collection)
     # ==============================================================================
-    - name: Collect Transplant Artifacts
+    - name: Collect Transplant Kit
       if: steps.compile.outputs.status == 'success'
       run: |
         cd openwrt
         mkdir -p transplant_kit
         
-        echo "Collecting files for Tina SDK injection..."
+        echo "Collecting files for Tina SDK..."
         
-        # 1. 抓取 boot.scr
+        # 1. 引导脚本 (boot.scr)
         cp files/boot.scr transplant_kit/ 2>/dev/null || echo "boot.scr missing"
         
-        # 2. 抓取 zImage (内核)
-        # find 命令会自动查找 bin 目录下的 zImage
+        # 2. 内核 (zImage)
         find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_kit/zImage \;
         
-        # 3. 抓取 DTB (设备树)
-        # 查找我们编译出的特定 dtb
+        # 3. 设备树 (.dtb)
         find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_kit/ \;
         
-        # 4. 抓取并解压 Rootfs (文件系统)
-        # 查找 ext4.gz
-        ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" | head -n 1)
-        if [ -n "$ROOTFS_GZ" ]; then
-            echo "Found rootfs: $ROOTFS_GZ"
-            cp "$ROOTFS_GZ" transplant_kit/rootfs.ext4.gz
-            # 解压出 rootfs.ext4，方便你直接使用
-            gzip -d -k transplant_kit/rootfs.ext4.gz
-        else
-            echo "Warning: rootfs.ext4.gz not found!"
+        # 4. 文件系统 (rootfs.ext4)
+        # 注意：这里查找 ext4.gz 并解压，或者查找原始 ext4
+        find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" -exec cp {} transplant_kit/rootfs.ext4.gz \;
+        if [ -f transplant_kit/rootfs.ext4.gz ]; then
+            gzip -d transplant_kit/rootfs.ext4.gz
         fi
-        
-        # 5. 抓取 tar.gz Rootfs (备用，方便解压修改)
-        find bin/targets/sunxi/cortexa7/ -name "*rootfs.tar.gz" -exec cp {} transplant_kit/ \;
-        
+
+        # 验证文件
         ls -lh transplant_kit/
 
     - name: Upload Transplant Kit
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success'
       with:
-        name: Tina_Transplant_Files
+        name: OpenWrt_Transplant_Kit
         path: openwrt/transplant_kit/
     # ==============================================================================
 

@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt for Tronlong T113 (Transplant Mode)
+# Description: Build OpenWrt for Tina SDK Transplant
 #
 
 name: OpenWrt Builder
@@ -93,41 +93,44 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     # ==============================================================================
-    # 📦 收集移花接木所需文件 (Artifacts Collection)
+    # 📦 收集 Tina SDK 所需文件 (自动重命名)
     # ==============================================================================
-    - name: Collect Transplant Kit
+    - name: Collect Tina Transplant Files
       if: steps.compile.outputs.status == 'success'
       run: |
         cd openwrt
-        mkdir -p transplant_kit
+        mkdir -p tina_files
         
-        echo "Collecting files for Tina SDK..."
+        echo "Collecting and Renaming files for Tina SDK..."
         
-        # 1. 引导脚本 (boot.scr)
-        cp files/boot.scr transplant_kit/ 2>/dev/null || echo "boot.scr missing"
+        # 1. 引导脚本
+        cp files/boot.scr tina_files/ 2>/dev/null || echo "boot.scr missing"
         
-        # 2. 内核 (zImage)
-        find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} transplant_kit/zImage \;
+        # 2. 内核 (zImage -> bImage)
+        # Tina SDK 期望内核名为 bImage
+        find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} tina_files/bImage \; 2>/dev/null
         
-        # 3. 设备树 (.dtb)
-        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} transplant_kit/ \;
+        # 3. 设备树 (dtb -> sunxi.dtb)
+        # Tina SDK 期望设备树名为 sunxi.dtb
+        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} tina_files/sunxi.dtb \; 2>/dev/null
         
-        # 4. 文件系统 (rootfs.ext4)
-        # 注意：这里查找 ext4.gz 并解压，或者查找原始 ext4
-        find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" -exec cp {} transplant_kit/rootfs.ext4.gz \;
-        if [ -f transplant_kit/rootfs.ext4.gz ]; then
-            gzip -d transplant_kit/rootfs.ext4.gz
+        # 4. 文件系统 (rootfs.ext4 -> rootfs.ext4)
+        # Tina SDK pack 脚本会使用 rootfs.ext4
+        find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" -exec cp {} tina_files/rootfs.ext4.gz \;
+        if [ -f tina_files/rootfs.ext4.gz ]; then
+            gzip -d tina_files/rootfs.ext4.gz
         fi
 
-        # 验证文件
-        ls -lh transplant_kit/
+        # 验证文件是否收集齐了
+        echo "=== Files ready for Tina pack ==="
+        ls -lh tina_files/
 
-    - name: Upload Transplant Kit
+    - name: Upload Tina Transplant Kit
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success'
       with:
-        name: OpenWrt_Transplant_Kit
-        path: openwrt/transplant_kit/
+        name: Tina_Transplant_Kit
+        path: openwrt/tina_files/
     # ==============================================================================
 
     - name: Check space usage

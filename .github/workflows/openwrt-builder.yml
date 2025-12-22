@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt & Robustly Collect Artifacts
+# Description: Build & Deep Search Artifacts for Tina Transplant
 #
 
 name: OpenWrt Builder
@@ -85,15 +85,15 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        # 允许编译失败继续，只要核心文件生成了就行
-        make -j$(nproc) || echo "Make failed, continuing to collect artifacts..."
+        # 允许 make 报错，只要生成了内核就行
+        make -j$(nproc) || echo "Make failed, proceeding to collect artifacts..."
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     # ==============================================================================
-    # 📦 收集 Tina Transplant Files (修复版)
+    # 📦 深度搜刮核心文件 (Deep Search for Transplant Kit)
     # ==============================================================================
     - name: Collect Tina Transplant Files
       if: (!cancelled())
@@ -101,42 +101,66 @@ jobs:
         cd openwrt
         mkdir -p tina_files
         
-        echo "Collecting files..."
+        echo ">>> Starting Deep Search for Artifacts..."
         
-        # 1. 引导脚本
-        [ -f files/boot.scr ] && cp files/boot.scr tina_files/ || echo "boot.scr missing"
+        # 1. 引导脚本 (boot.scr)
+        # 来源：files 目录
+        cp files/boot.scr tina_files/ 2>/dev/null || echo "❌ boot.scr missing"
         
         # 2. 内核 (zImage -> bImage)
+        # 来源：直接去内核编译目录找 (build_dir/target-*/linux-*/arch/arm/boot/zImage)
+        # 这是最原始的生成位置，即便打包失败它也在
         echo "Searching for zImage..."
-        # 使用 -exec 找到即复制，-quit 找到第一个就停止 (防止复制多个)
-        find bin/targets/sunxi/cortexa7/ -name "*zImage" -type f -exec cp {} tina_files/bImage \; -quit
+        ZIMAGE_PATH=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/ -name "zImage" -type f | head -n 1)
+        if [ -f "$ZIMAGE_PATH" ]; then
+            cp "$ZIMAGE_PATH" tina_files/bImage
+            echo "✅ Found Kernel: $ZIMAGE_PATH -> bImage"
+        else
+            echo "❌ zImage not found in build_dir!"
+        fi
         
         # 3. 设备树 (dtb -> sunxi.dtb)
+        # 来源：编译目录下的 dts 文件夹
         echo "Searching for DTB..."
-        # 先在 build_dir 里找 (这是最原始生成的地方)
-        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -type f -exec cp {} tina_files/sunxi.dtb \; -quit
-        
-        # 如果上面没找到，再试着全盘搜一次
-        if [ ! -f tina_files/sunxi.dtb ]; then
-             echo "Standard path DTB not found, searching broadly..."
-             find . -name "sun8i-t113-tronlong-minievm.dtb" -type f -exec cp {} tina_files/sunxi.dtb \; -quit
+        DTB_PATH=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/dts/ -name "sun8i-t113-tronlong-minievm.dtb" -type f | head -n 1)
+        if [ -f "$DTB_PATH" ]; then
+            cp "$DTB_PATH" tina_files/sunxi.dtb
+            echo "✅ Found DTB: $DTB_PATH -> sunxi.dtb"
+        else
+            # 备选：去 image 目录找
+            DTB_PATH_2=$(find build_dir/target-*/linux-*/image/ -name "sun8i-t113-tronlong-minievm.dtb" -type f | head -n 1)
+            if [ -f "$DTB_PATH_2" ]; then
+                cp "$DTB_PATH_2" tina_files/sunxi.dtb
+                echo "✅ Found DTB (in image dir): $DTB_PATH_2 -> sunxi.dtb"
+            else
+                echo "❌ DTB not found!"
+            fi
         fi
         
         # 4. 文件系统 (rootfs.ext4)
         echo "Searching for rootfs..."
-        # 查找并解压
+        # 优先找 bin 目录下的压缩包
         ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" -type f | head -n 1)
-        if [ -n "$ROOTFS_GZ" ]; then
-            echo "Found: $ROOTFS_GZ"
+        if [ -f "$ROOTFS_GZ" ]; then
+            echo "✅ Found compressed rootfs: $ROOTFS_GZ"
             cp "$ROOTFS_GZ" tina_files/rootfs.ext4.gz
-            gzip -d tina_files/rootfs.ext4.gz
+            gzip -d -f tina_files/rootfs.ext4.gz
+            echo "   -> Decompressed to rootfs.ext4"
         else
-            echo "Warning: rootfs.ext4.gz not found! Trying uncompressed..."
-            find build_dir/ -name "root.ext4" -type f -exec cp {} tina_files/rootfs.ext4 \; -quit
+            # 备选：找 build_dir 下的原始文件 (通常叫 root.ext4)
+            ROOTFS_RAW=$(find build_dir/target-*/linux-*/ -name "root.ext4" -type f | head -n 1)
+            if [ -f "$ROOTFS_RAW" ]; then
+                cp "$ROOTFS_RAW" tina_files/rootfs.ext4
+                echo "✅ Found raw rootfs: $ROOTFS_RAW -> rootfs.ext4"
+            else
+                echo "❌ rootfs.ext4 not found!"
+            fi
         fi
 
-        # 最终验证
-        echo "=== Content of tina_files ==="
+        # 验证文件列表
+        echo "=========================================="
+        echo "       Final Transplant Kit Content       "
+        echo "=========================================="
         ls -lh tina_files/
 
     - name: Upload Tina Transplant Kit

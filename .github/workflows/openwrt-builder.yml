@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt & Force Collect Artifacts (Even on Failure)
+# Description: Build OpenWrt & Robustly Collect Artifacts
 #
 
 name: OpenWrt Builder
@@ -36,7 +36,6 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        # 必须安装 u-boot-tools 用于生成 boot.scr
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
@@ -86,15 +85,15 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        # 允许 make 报错，继续执行后续步骤
-        make -j$(nproc) || echo "Make failed, but proceeding to collect artifacts..."
+        # 允许编译失败继续，只要核心文件生成了就行
+        make -j$(nproc) || echo "Make failed, continuing to collect artifacts..."
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-# ==============================================================================
-    # 📦 收集 Tina SDK 所需文件 (修复 DTB 缺失问题)
+    # ==============================================================================
+    # 📦 收集 Tina Transplant Files (修复版)
     # ==============================================================================
     - name: Collect Tina Transplant Files
       if: (!cancelled())
@@ -102,40 +101,42 @@ jobs:
         cd openwrt
         mkdir -p tina_files
         
-        echo "Collecting and preparing files..."
+        echo "Collecting files..."
         
         # 1. 引导脚本
-        cp files/boot.scr tina_files/ 2>/dev/null || echo "boot.scr missing"
+        [ -f files/boot.scr ] && cp files/boot.scr tina_files/ || echo "boot.scr missing"
         
         # 2. 内核 (zImage -> bImage)
-        # 暴力搜索所有 zImage，取最新的一个
-        find . -name "zImage" -type f -print0 | xargs -0 ls -1t | head -n 1 | xargs -I {} cp {} tina_files/bImage
+        echo "Searching for zImage..."
+        # 使用 -exec 找到即复制，-quit 找到第一个就停止 (防止复制多个)
+        find bin/targets/sunxi/cortexa7/ -name "*zImage" -type f -exec cp {} tina_files/bImage \; -quit
         
-        # 3. 设备树 (dtb -> sunxi.dtb) [关键修复]
-        # 暴力搜索所有 sun8i-t113-tronlong-minievm.dtb，取最新的一个
+        # 3. 设备树 (dtb -> sunxi.dtb)
         echo "Searching for DTB..."
-        find . -name "sun8i-t113-tronlong-minievm.dtb" -type f -print0 | xargs -0 ls -1t | head -n 1 | xargs -I {} cp {} tina_files/sunxi.dtb
+        # 先在 build_dir 里找 (这是最原始生成的地方)
+        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -type f -exec cp {} tina_files/sunxi.dtb \; -quit
         
-        # 如果没找到，尝试找任何 sun8i*.dtb (作为备选)
+        # 如果上面没找到，再试着全盘搜一次
         if [ ! -f tina_files/sunxi.dtb ]; then
-             echo "Specific DTB not found, searching for generic..."
-             find build_dir/ -name "sun8i-t113*.dtb" -type f | head -n 1 | xargs -I {} cp {} tina_files/sunxi.dtb
+             echo "Standard path DTB not found, searching broadly..."
+             find . -name "sun8i-t113-tronlong-minievm.dtb" -type f -exec cp {} tina_files/sunxi.dtb \; -quit
         fi
-
-        # 4. 文件系统 (自动解压 rootfs.ext4.gz -> rootfs.ext4)
-        ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" | head -n 1)
         
-        if [ -f "$ROOTFS_GZ" ]; then
-            echo "Found compressed rootfs: $ROOTFS_GZ"
+        # 4. 文件系统 (rootfs.ext4)
+        echo "Searching for rootfs..."
+        # 查找并解压
+        ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" -type f | head -n 1)
+        if [ -n "$ROOTFS_GZ" ]; then
+            echo "Found: $ROOTFS_GZ"
             cp "$ROOTFS_GZ" tina_files/rootfs.ext4.gz
             gzip -d tina_files/rootfs.ext4.gz
         else
-            # 尝试找未压缩的
-            find build_dir/ -name "root.ext4" -type f | head -n 1 | xargs -I {} cp {} tina_files/rootfs.ext4
+            echo "Warning: rootfs.ext4.gz not found! Trying uncompressed..."
+            find build_dir/ -name "root.ext4" -type f -exec cp {} tina_files/rootfs.ext4 \; -quit
         fi
 
-        # 验证文件是否收集齐了
-        echo "=== Transplant Kit Content ==="
+        # 最终验证
+        echo "=== Content of tina_files ==="
         ls -lh tina_files/
 
     - name: Upload Tina Transplant Kit
@@ -149,3 +150,32 @@ jobs:
     - name: Check space usage
       if: (!cancelled())
       run: df -hT
+
+    - name: Upload bin directory
+      uses: actions/upload-artifact@main
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
+      with:
+        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: openwrt/bin
+
+    - name: Organize files
+      id: organize
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+
+    - name: Delete workflow runs
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        retain_days: 0
+        keep_minimum_runs: 2

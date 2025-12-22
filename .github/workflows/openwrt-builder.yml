@@ -92,8 +92,8 @@ jobs:
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    # ==============================================================================
-    # 📦 深度搜刮核心文件 (Deep Search for Transplant Kit)
+# ==============================================================================
+    # 📦 收集 Tina SDK 所需文件 (增强版：DTB 深度搜索 + 源码备份)
     # ==============================================================================
     - name: Collect Tina Transplant Files
       if: (!cancelled())
@@ -101,66 +101,52 @@ jobs:
         cd openwrt
         mkdir -p tina_files
         
-        echo ">>> Starting Deep Search for Artifacts..."
+        echo "Collecting and preparing files..."
         
-        # 1. 引导脚本 (boot.scr)
-        # 来源：files 目录
+        # 1. 引导脚本
         cp files/boot.scr tina_files/ 2>/dev/null || echo "❌ boot.scr missing"
         
         # 2. 内核 (zImage -> bImage)
-        # 来源：直接去内核编译目录找 (build_dir/target-*/linux-*/arch/arm/boot/zImage)
-        # 这是最原始的生成位置，即便打包失败它也在
         echo "Searching for zImage..."
-        ZIMAGE_PATH=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/ -name "zImage" -type f | head -n 1)
-        if [ -f "$ZIMAGE_PATH" ]; then
-            cp "$ZIMAGE_PATH" tina_files/bImage
-            echo "✅ Found Kernel: $ZIMAGE_PATH -> bImage"
-        else
-            echo "❌ zImage not found in build_dir!"
-        fi
+        # 暴力全盘搜，取最新的一个
+        find build_dir/ -name "zImage" -type f -exec ls -1t "{}" + | head -n 1 | xargs -I {} cp {} tina_files/bImage
+        if [ -f tina_files/bImage ]; then echo "✅ Kernel found"; else echo "❌ Kernel missing"; fi
         
-        # 3. 设备树 (dtb -> sunxi.dtb)
-        # 来源：编译目录下的 dts 文件夹
+        # 3. 设备树 (DTB) - [增强搜索逻辑]
         echo "Searching for DTB..."
-        DTB_PATH=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/dts/ -name "sun8i-t113-tronlong-minievm.dtb" -type f | head -n 1)
-        if [ -f "$DTB_PATH" ]; then
-            cp "$DTB_PATH" tina_files/sunxi.dtb
-            echo "✅ Found DTB: $DTB_PATH -> sunxi.dtb"
-        else
-            # 备选：去 image 目录找
-            DTB_PATH_2=$(find build_dir/target-*/linux-*/image/ -name "sun8i-t113-tronlong-minievm.dtb" -type f | head -n 1)
-            if [ -f "$DTB_PATH_2" ]; then
-                cp "$DTB_PATH_2" tina_files/sunxi.dtb
-                echo "✅ Found DTB (in image dir): $DTB_PATH_2 -> sunxi.dtb"
-            else
-                echo "❌ DTB not found!"
-            fi
+        # 尝试 1: 标准构建目录
+        find build_dir/ -name "sun8i-t113-tronlong-minievm.dtb" -type f -exec cp {} tina_files/sunxi.dtb \; -quit
+        
+        # 尝试 2: 如果没找到，尝试找 image 目录下的临时文件
+        if [ ! -f tina_files/sunxi.dtb ]; then
+             echo "Standard DTB not found, trying image temp files..."
+             find build_dir/ -name "image-sun8i-t113-tronlong-minievm.dtb" -type f -exec cp {} tina_files/sunxi.dtb \; -quit
         fi
         
-        # 4. 文件系统 (rootfs.ext4)
-        echo "Searching for rootfs..."
-        # 优先找 bin 目录下的压缩包
-        ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" -type f | head -n 1)
-        if [ -f "$ROOTFS_GZ" ]; then
-            echo "✅ Found compressed rootfs: $ROOTFS_GZ"
-            cp "$ROOTFS_GZ" tina_files/rootfs.ext4.gz
-            gzip -d -f tina_files/rootfs.ext4.gz
-            echo "   -> Decompressed to rootfs.ext4"
-        else
-            # 备选：找 build_dir 下的原始文件 (通常叫 root.ext4)
-            ROOTFS_RAW=$(find build_dir/target-*/linux-*/ -name "root.ext4" -type f | head -n 1)
-            if [ -f "$ROOTFS_RAW" ]; then
-                cp "$ROOTFS_RAW" tina_files/rootfs.ext4
-                echo "✅ Found raw rootfs: $ROOTFS_RAW -> rootfs.ext4"
-            else
-                echo "❌ rootfs.ext4 not found!"
-            fi
+        if [ -f tina_files/sunxi.dtb ]; then 
+            echo "✅ DTB binary found"; 
+        else 
+            echo "⚠️ DTB binary missing! Backing up source file..."
         fi
 
-        # 验证文件列表
-        echo "=========================================="
-        echo "       Final Transplant Kit Content       "
-        echo "=========================================="
+        # 4. [新功能] 备份 DTS 源文件 (保底措施)
+        # 如果没有编译出 dtb，我们可以用这个文件在本地编译
+        cp files/sun8i-t113-tronlong-minievm.dts tina_files/board.dts
+        
+        # 5. 文件系统 (rootfs.ext4)
+        echo "Searching for rootfs..."
+        ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" | head -n 1)
+        if [ -f "$ROOTFS_GZ" ]; then
+            echo "✅ Found compressed rootfs"
+            cp "$ROOTFS_GZ" tina_files/rootfs.ext4.gz
+            gzip -d -f tina_files/rootfs.ext4.gz
+        else
+            # 备选：找未压缩的
+            find build_dir/ -name "root.ext4" -type f -exec cp {} tina_files/rootfs.ext4 \; -quit
+        fi
+
+        # 验证
+        echo "=== Final Kit Content ==="
         ls -lh tina_files/
 
     - name: Upload Tina Transplant Kit

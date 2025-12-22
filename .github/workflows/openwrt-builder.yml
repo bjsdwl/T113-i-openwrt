@@ -93,11 +93,11 @@ jobs:
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    # ==============================================================================
-    # 📦 强制收集移花接木所需文件 (哪怕编译报错也要执行！)
+# ==============================================================================
+    # 📦 收集 Tina SDK 所需文件 (修复 DTB 缺失问题)
     # ==============================================================================
     - name: Collect Tina Transplant Files
-      if: (!cancelled())  # 关键修改：只要不取消就执行，忽略之前的失败
+      if: (!cancelled())
       run: |
         cd openwrt
         mkdir -p tina_files
@@ -108,26 +108,30 @@ jobs:
         cp files/boot.scr tina_files/ 2>/dev/null || echo "boot.scr missing"
         
         # 2. 内核 (zImage -> bImage)
-        # 即使打包失败，zImage 通常已经生成了
-        find build_dir/target-*/linux-sunxi_cortexa7/linux-*/arch/arm/boot/ -name "zImage" -exec cp {} tina_files/bImage \; 2>/dev/null
-        # 备选路径
-        find bin/targets/sunxi/cortexa7/ -name "*zImage" -exec cp {} tina_files/bImage \; 2>/dev/null
+        # 暴力搜索所有 zImage，取最新的一个
+        find . -name "zImage" -type f -print0 | xargs -0 ls -1t | head -n 1 | xargs -I {} cp {} tina_files/bImage
         
-        # 3. 设备树 (dtb -> sunxi.dtb)
-        find build_dir/target-*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" -exec cp {} tina_files/sunxi.dtb \; 2>/dev/null
+        # 3. 设备树 (dtb -> sunxi.dtb) [关键修复]
+        # 暴力搜索所有 sun8i-t113-tronlong-minievm.dtb，取最新的一个
+        echo "Searching for DTB..."
+        find . -name "sun8i-t113-tronlong-minievm.dtb" -type f -print0 | xargs -0 ls -1t | head -n 1 | xargs -I {} cp {} tina_files/sunxi.dtb
         
+        # 如果没找到，尝试找任何 sun8i*.dtb (作为备选)
+        if [ ! -f tina_files/sunxi.dtb ]; then
+             echo "Specific DTB not found, searching for generic..."
+             find build_dir/ -name "sun8i-t113*.dtb" -type f | head -n 1 | xargs -I {} cp {} tina_files/sunxi.dtb
+        fi
+
         # 4. 文件系统 (自动解压 rootfs.ext4.gz -> rootfs.ext4)
-        # 即使 img 打包失败，rootfs.ext4.gz 通常也已经生成了
         ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" | head -n 1)
         
         if [ -f "$ROOTFS_GZ" ]; then
             echo "Found compressed rootfs: $ROOTFS_GZ"
             cp "$ROOTFS_GZ" tina_files/rootfs.ext4.gz
             gzip -d tina_files/rootfs.ext4.gz
-            echo "  -> Decompressed to: rootfs.ext4"
         else
             # 尝试找未压缩的
-            find build_dir/target-*/linux-sunxi_cortexa7/ -name "root.ext4" -exec cp {} tina_files/rootfs.ext4 \; 2>/dev/null
+            find build_dir/ -name "root.ext4" -type f | head -n 1 | xargs -I {} cp {} tina_files/rootfs.ext4
         fi
 
         # 验证文件是否收集齐了

@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt & Auto-Package Tina Transplant Kit (Fixed cp error)
+# Description: Build OpenWrt & Auto-Package Tina Transplant Kit (Syntax Fixed)
 #
 
 name: OpenWrt Builder
@@ -94,7 +94,7 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     # ==============================================================================
-    # 📦 智能收集移花接木文件 (修复了 cp 错误)
+    # 📦 智能收集移花接木文件 (修复了语法错误)
     # ==============================================================================
     - name: Collect Tina Transplant Files
       if: (!cancelled())
@@ -112,14 +112,13 @@ jobs:
             cp -v files/boot.scr tina_files/
         else
             echo "⚠️ boot.scr missing in files/, trying to generate one..."
-            # 现场救急：如果没有 boot.scr，尝试现场生成
-            cat <<EOF > boot.cmd
-            part uuid mmc 0:2 uuid
-            setenv bootargs console=ttyS0,115200 root=PARTUUID=\${uuid} rootwait panic=10 earlycon=uart8250,mmio32,0x02500000
-            load mmc 0:1 \${kernel_addr_r} zImage
-            load mmc 0:1 \${fdt_addr_r} sunxi.dtb
-            bootz \${kernel_addr_r} - \${fdt_addr_r}
-            EOF
+            # 修复：使用 echo 代替 cat <<EOF，避免 YAML 缩进导致的语法错误
+            echo "part uuid mmc 0:2 uuid" > boot.cmd
+            echo "setenv bootargs console=ttyS0,115200 root=PARTUUID=\${uuid} rootwait panic=10 earlycon=uart8250,mmio32,0x02500000" >> boot.cmd
+            echo "load mmc 0:1 \${kernel_addr_r} zImage" >> boot.cmd
+            echo "load mmc 0:1 \${fdt_addr_r} sunxi.dtb" >> boot.cmd
+            echo "bootz \${kernel_addr_r} - \${fdt_addr_r}" >> boot.cmd
+            
             mkimage -C none -A arm -T script -d boot.cmd tina_files/boot.scr
             echo "✅ Generated temporary boot.scr"
         fi
@@ -129,11 +128,11 @@ jobs:
         # ----------------------------------------------------------------------
         echo "Searching for zImage..."
         # 排除 initramfs，只抓纯内核
-        ZIMAGE=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/ -name "zImage" ! -name "*initramfs*" -type f | head -n 1)
+        ZIMAGE=$(find bin/targets/sunxi/cortexa7/ -name "*zImage" ! -name "*initramfs*" -type f | head -n 1)
         
         if [ -z "$ZIMAGE" ]; then
-            echo "  -> Not in build_dir, searching bin..."
-            ZIMAGE=$(find bin/targets/sunxi/cortexa7/ -name "*zImage" ! -name "*initramfs*" -type f | head -n 1)
+            echo "  -> Not in bin, searching build_dir..."
+            ZIMAGE=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/ -name "zImage" ! -name "*initramfs*" -type f | head -n 1)
         fi
         
         if [ -f "$ZIMAGE" ]; then

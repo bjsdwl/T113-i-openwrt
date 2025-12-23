@@ -1,5 +1,6 @@
 #
-# Description: Build OpenWrt & Robustly Collect Transplant Artifacts
+# https://github.com/P3TERX/Actions-OpenWrt
+# Description: Build OpenWrt & Force Collect Artifacts (Ignore Build Errors)
 #
 
 name: OpenWrt Builder
@@ -15,6 +16,9 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
+  UPLOAD_BIN_DIR: false
+  UPLOAD_FIRMWARE: true
+  UPLOAD_RELEASE: false
   TZ: Asia/Shanghai
 
 jobs:
@@ -32,7 +36,6 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        # 安装必要工具
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
@@ -82,11 +85,19 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        
+        # ⚠️ 关键修改：允许 make 失败
+        # 如果 make 报错，会打印信息但不会停止 Workflow，继续执行后续的收集步骤
+        make -j$(nproc) || echo "WARNING: Make failed! Proceeding to collect artifacts..."
+        
         echo "status=success" >> $GITHUB_OUTPUT
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
+        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     # ==============================================================================
-    # 📦 核心修正：智能抓取并解压 rootfs.ext4
+    # 📦 强力搜刮文件 (Deep Search)
+    # 即使编译最后一步报错，这里的脚本也会深入源码目录把文件挖出来
     # ==============================================================================
     - name: Collect Tina Transplant Files
       if: (!cancelled())
@@ -94,57 +105,62 @@ jobs:
         cd openwrt
         mkdir -p tina_files
         
-        echo ">>> Collecting files..."
+        echo ">>> Starting Deep Artifact Search..."
         
         # 1. 引导脚本 (boot.scr)
-        cp files/boot.scr tina_files/ 2>/dev/null || echo "❌ boot.scr missing"
+        cp files/boot.scr tina_files/ 2>/dev/null || echo "⚠️ boot.scr missing"
         
-        # 2. 内核 (bImage)
-        # 排除 initramfs，只抓纯内核
-        ZIMAGE=$(find bin/targets/sunxi/cortexa7/ -name "*zImage" ! -name "*initramfs*" -type f | head -n 1)
+        # 2. 内核 (zImage -> bImage)
+        echo "Searching for zImage..."
+        # 排除 initramfs，只找纯内核。优先找 build_dir 因为 make install 可能失败导致 bin 目录为空
+        ZIMAGE=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/ -name "zImage" ! -name "*initramfs*" -type f | head -n 1)
+        
         if [ -f "$ZIMAGE" ]; then
             cp "$ZIMAGE" tina_files/bImage
             echo "✅ Found Kernel: $ZIMAGE -> bImage"
         else
-            # 备选路径
-            find build_dir/target-*/linux-*/linux-*/arch/arm/boot/ -name "zImage" -exec cp {} tina_files/bImage \;
+            echo "❌ Error: zImage not found in build_dir!"
         fi
         
-        # 3. 设备树 (board.dts / sunxi.dtb)
-        # 优先抓编译好的 dtb
+        # 3. 设备树 (dtb -> sunxi.dtb)
+        echo "Searching for DTB..."
+        # 你的 DTS 名字叫 sun8i-t113-tronlong-minievm
         DTB_PATH=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/dts/ -name "sun8i-t113-tronlong-minievm.dtb" -type f | head -n 1)
+        
         if [ -f "$DTB_PATH" ]; then
             cp "$DTB_PATH" tina_files/sunxi.dtb
             echo "✅ Found DTB: $DTB_PATH -> sunxi.dtb"
         else
-            # 没找到 dtb 就抓源码 dts，方便本地编译
-            cp files/sun8i-t113-tronlong-minievm.dts tina_files/board.dts
-            echo "⚠️ DTB binary missing, backed up source as board.dts"
+            echo "⚠️ DTB binary missing! Backing up source file..."
+            cp files/sun8i-t113-tronlong-minievm.dts tina_files/board.dts 2>/dev/null
         fi
         
-        # 4. 文件系统 (rootfs.ext4) [关键修正]
-        # OpenWrt 默认会把 ext4 压缩成 .gz，我们需要找到它并解压
-        echo "Searching for rootfs..."
+        # 4. 文件系统 (rootfs.ext4)
+        echo "Searching for rootfs.ext4..."
+        # 优先找 bin 目录 (如果是打包阶段失败，这里可能没有)
         ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" -type f | head -n 1)
         
         if [ -f "$ROOTFS_GZ" ]; then
-            echo "✅ Found compressed rootfs: $ROOTFS_GZ"
+            echo "✅ Found compressed rootfs in bin/: $ROOTFS_GZ"
             cp "$ROOTFS_GZ" tina_files/rootfs.ext4.gz
-            echo "   Unzipping..."
             gzip -d -f tina_files/rootfs.ext4.gz
-            echo "   -> Created: rootfs.ext4"
+            echo "   -> Decompressed to: rootfs.ext4"
         else
-            # 尝试找未压缩的原始文件 (在 build_dir 中)
+            # 备选：找 build_dir 下的原始文件 (通常叫 root.ext4)
+            echo "Searching build_dir for raw root.ext4..."
             ROOTFS_RAW=$(find build_dir/target-*/linux-*/ -name "root.ext4" -type f | head -n 1)
             if [ -f "$ROOTFS_RAW" ]; then
                 cp "$ROOTFS_RAW" tina_files/rootfs.ext4
-                echo "✅ Found raw rootfs: $ROOTFS_RAW -> rootfs.ext4"
+                echo "✅ Found raw rootfs in build_dir: $ROOTFS_RAW -> rootfs.ext4"
             else
-                echo "❌ Error: rootfs.ext4 NOT FOUND! Please check .config"
+                echo "❌ Error: rootfs.ext4 not found!"
             fi
         fi
 
-        # 列表确认
+        # 验证文件列表
+        echo "=========================================="
+        echo "       Transplant Kit Content             "
+        echo "=========================================="
         ls -lh tina_files/
 
     - name: Upload Tina Transplant Kit
@@ -153,7 +169,8 @@ jobs:
       with:
         name: Tina_Transplant_Kit
         path: openwrt/tina_files/
-    
+    # ==============================================================================
+
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
       with:

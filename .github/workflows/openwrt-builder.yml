@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt & Auto-Compile DTB for Tina Transplant
+# Description: Build OpenWrt & Auto-Package Tina Transplant Kit (Fixed cp error)
 #
 
 name: OpenWrt Builder
@@ -36,7 +36,7 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        # ⚠️ 确保安装 device-tree-compiler
+        # ⚠️ 必须安装 u-boot-tools (生成 boot.scr) 和 device-tree-compiler (处理 DTS)
         sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
@@ -86,14 +86,15 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        make -j$(nproc) || echo "Make failed, proceeding to collect artifacts..."
+        # 允许 make 报错，继续执行后续步骤
+        make -j$(nproc) || echo "WARNING: Make failed! Proceeding to collect artifacts..."
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     # ==============================================================================
-    # 📦 收集文件 (含自动编译 DTB 功能)
+    # 📦 智能收集移花接木文件 (修复了 cp 错误)
     # ==============================================================================
     - name: Collect Tina Transplant Files
       if: (!cancelled())
@@ -101,7 +102,105 @@ jobs:
         cd openwrt
         mkdir -p tina_files
         
-        echo ">>> Collecting files..."
+        echo ">>> Collecting files for Tina SDK..."
         
-        # 1. 引导脚本
-        cp files/boot.
+        # ----------------------------------------------------------------------
+        # 1. 引导脚本 (boot.scr)
+        # ----------------------------------------------------------------------
+        if [ -f files/boot.scr ]; then
+            echo "✅ Found boot.scr in files/"
+            cp -v files/boot.scr tina_files/
+        else
+            echo "⚠️ boot.scr missing in files/, trying to generate one..."
+            # 现场救急：如果没有 boot.scr，尝试现场生成
+            cat <<EOF > boot.cmd
+            part uuid mmc 0:2 uuid
+            setenv bootargs console=ttyS0,115200 root=PARTUUID=\${uuid} rootwait panic=10 earlycon=uart8250,mmio32,0x02500000
+            load mmc 0:1 \${kernel_addr_r} zImage
+            load mmc 0:1 \${fdt_addr_r} sunxi.dtb
+            bootz \${kernel_addr_r} - \${fdt_addr_r}
+            EOF
+            mkimage -C none -A arm -T script -d boot.cmd tina_files/boot.scr
+            echo "✅ Generated temporary boot.scr"
+        fi
+        
+        # ----------------------------------------------------------------------
+        # 2. 内核 (zImage -> bImage)
+        # ----------------------------------------------------------------------
+        echo "Searching for zImage..."
+        # 排除 initramfs，只抓纯内核
+        ZIMAGE=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/ -name "zImage" ! -name "*initramfs*" -type f | head -n 1)
+        
+        if [ -z "$ZIMAGE" ]; then
+            echo "  -> Not in build_dir, searching bin..."
+            ZIMAGE=$(find bin/targets/sunxi/cortexa7/ -name "*zImage" ! -name "*initramfs*" -type f | head -n 1)
+        fi
+        
+        if [ -f "$ZIMAGE" ]; then
+            cp -v "$ZIMAGE" tina_files/bImage
+            echo "✅ Found Kernel: $ZIMAGE -> bImage"
+        else
+            echo "❌ Error: Pure zImage not found!"
+        fi
+        
+        # ----------------------------------------------------------------------
+        # 3. 设备树 (dtb -> sunxi.dtb)
+        # ----------------------------------------------------------------------
+        echo "Searching for DTB..."
+        DTB_PATH=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/dts/ -name "sun8i-t113-tronlong-minievm.dtb" -type f | head -n 1)
+        
+        if [ -z "$DTB_PATH" ]; then
+             DTB_PATH=$(find build_dir/target-*/linux-*/image/ -name "sun8i-t113-tronlong-minievm.dtb" -type f | head -n 1)
+        fi
+        
+        if [ -f "$DTB_PATH" ]; then
+            cp -v "$DTB_PATH" tina_files/sunxi.dtb
+            echo "✅ Found existing DTB: $DTB_PATH"
+        else
+            echo "⚠️ Existing DTB not found. Manually compiling..."
+            if [ -f "files/sun8i-t113-tronlong-minievm.dts" ]; then
+                dtc -I dts -O dtb -o tina_files/sunxi.dtb files/sun8i-t113-tronlong-minievm.dts
+                echo "✅ DTB manually compiled: sunxi.dtb"
+            else
+                echo "❌ Source DTS file missing!"
+            fi
+        fi
+        
+        # ----------------------------------------------------------------------
+        # 4. 文件系统 (rootfs.ext4)
+        # ----------------------------------------------------------------------
+        echo "Searching for rootfs.ext4..."
+        ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" -type f | head -n 1)
+        
+        if [ -f "$ROOTFS_GZ" ]; then
+            echo "✅ Found compressed rootfs: $ROOTFS_GZ"
+            cp "$ROOTFS_GZ" tina_files/rootfs.ext4.gz
+            gzip -d -f tina_files/rootfs.ext4.gz
+            echo "   -> Decompressed: rootfs.ext4"
+        else
+            # 备选：找未压缩的
+            ROOTFS_RAW=$(find build_dir/target-*/linux-*/ -name "root.ext4" -type f | head -n 1)
+            if [ -f "$ROOTFS_RAW" ]; then
+                cp -v "$ROOTFS_RAW" tina_files/rootfs.ext4
+                echo "✅ Found raw rootfs: rootfs.ext4"
+            else
+                echo "❌ Error: rootfs.ext4 NOT FOUND!"
+            fi
+        fi
+
+        echo "=== Transplant Kit Content ==="
+        ls -lh tina_files/
+
+    - name: Upload Tina Transplant Kit
+      uses: actions/upload-artifact@main
+      if: (!cancelled())
+      with:
+        name: Tina_Transplant_Kit
+        path: openwrt/tina_files/
+    # ==============================================================================
+
+    - name: Delete workflow runs
+      uses: Mattraks/delete-workflow-runs@main
+      with:
+        retain_days: 0
+        keep_minimum_runs: 2

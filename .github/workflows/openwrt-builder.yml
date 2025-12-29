@@ -1,12 +1,6 @@
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt & Auto-Package Tina Transplant Kit (Syntax Fixed)
-#
-
 name: OpenWrt Builder
 
 on:
-  repository_dispatch:
   workflow_dispatch:
 
 env:
@@ -16,9 +10,6 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: false
-  UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: false
   TZ: Asia/Shanghai
 
 jobs:
@@ -30,176 +21,81 @@ jobs:
       uses: actions/checkout@main
 
     - name: Initialization environment
-      env:
-        DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        sudo docker image prune --all --force
-        sudo -E apt-get -qq update
-        # ⚠️ 必须安装 u-boot-tools (生成 boot.scr) 和 device-tree-compiler (处理 DTS)
-        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
-        sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
+        sudo apt-get update
+        sudo apt-get install -y build-essential libncurses5-dev gawk git gettext swig python3-distutils python3-setuptools python3-dev u-boot-tools device-tree-compiler qemu-utils
+        pip3 install mkbootimg
 
     - name: Clone source code
-      working-directory: /workdir
       run: |
-        df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        ln -sf $GITHUB_WORKSPACE/openwrt /workdir
 
     - name: Load custom feeds
       run: |
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
         chmod +x $DIY_P1_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
-
-    - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
+        cd openwrt && $GITHUB_WORKSPACE/$DIY_P1_SH && ./scripts/feeds update -a && ./scripts/feeds install -a
 
     - name: Load custom configuration
       run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        [ -e files ] && cp -r files openwrt/files
+        [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
         chmod +x $DIY_P2_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+        cd openwrt && $GITHUB_WORKSPACE/$DIY_P2_SH
 
     - name: Download package
-      id: package
-      run: |
-        cd openwrt
-        make defconfig
-        make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+      run: cd openwrt && make defconfig && make download -j8
 
     - name: Compile the firmware
-      id: compile
-      run: |
-        cd openwrt
-        echo -e "$(nproc) thread compile"
-        # 允许 make 报错，继续执行后续步骤
-        make -j$(nproc) || echo "WARNING: Make failed! Proceeding to collect artifacts..."
-        echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+      run: cd openwrt && make -j$(nproc) || make -j1 V=s
 
     # ==============================================================================
-    # 📦 智能收集移花接木文件 (修复了语法错误)
+    # 🏗️ 物理镜像硬缝合 (Secure Boot & Android Boot Image)
     # ==============================================================================
-    - name: Collect Tina Transplant Files
+    - name: Final Image Stitching
       if: (!cancelled())
       run: |
         cd openwrt
-        mkdir -p tina_files
+        mkdir -p output
         
-        echo ">>> Collecting files for Tina SDK..."
-        
-        # ----------------------------------------------------------------------
-        # 1. 引导脚本 (boot.scr)
-        # ----------------------------------------------------------------------
-        if [ -f files/boot.scr ]; then
-            echo "✅ Found boot.scr in files/"
-            cp -v files/boot.scr tina_files/
-        else
-            echo "⚠️ boot.scr missing in files/, trying to generate one..."
-            # 修复：使用 echo 代替 cat <<EOF，避免 YAML 缩进导致的语法错误
-            echo "part uuid mmc 0:2 uuid" > boot.cmd
-            echo "setenv bootargs console=ttyS0,115200 root=PARTUUID=\${uuid} rootwait panic=10 earlycon=uart8250,mmio32,0x02500000" >> boot.cmd
-            echo "load mmc 0:1 \${kernel_addr_r} zImage" >> boot.cmd
-            echo "load mmc 0:1 \${fdt_addr_r} sunxi.dtb" >> boot.cmd
-            echo "bootz \${kernel_addr_r} - \${fdt_addr_r}" >> boot.cmd
-            
-            mkimage -C none -A arm -T script -d boot.cmd tina_files/boot.scr
-            echo "✅ Generated temporary boot.scr"
-        fi
-        
-        # ----------------------------------------------------------------------
-        # 2. 内核 (zImage -> bImage)
-        # ----------------------------------------------------------------------
-        echo "Searching for zImage..."
-        # 排除 initramfs，只抓纯内核
-        ZIMAGE=$(find bin/targets/sunxi/cortexa7/ -name "*zImage" ! -name "*initramfs*" -type f | head -n 1)
-        
-        if [ -z "$ZIMAGE" ]; then
-            echo "  -> Not in bin, searching build_dir..."
-            ZIMAGE=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/ -name "zImage" ! -name "*initramfs*" -type f | head -n 1)
-        fi
-        
-        if [ -f "$ZIMAGE" ]; then
-            cp -v "$ZIMAGE" tina_files/bImage
-            echo "✅ Found Kernel: $ZIMAGE -> bImage"
-        else
-            echo "❌ Error: Pure zImage not found!"
-        fi
-        
-        # ----------------------------------------------------------------------
-        # 3. 设备树 (dtb -> sunxi.dtb)
-        # ----------------------------------------------------------------------
-        echo "Searching for DTB..."
-        DTB_PATH=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/dts/ -name "sun8i-t113-tronlong-minievm.dtb" -type f | head -n 1)
-        
-        if [ -z "$DTB_PATH" ]; then
-             DTB_PATH=$(find build_dir/target-*/linux-*/image/ -name "sun8i-t113-tronlong-minievm.dtb" -type f | head -n 1)
-        fi
-        
-        if [ -f "$DTB_PATH" ]; then
-            cp -v "$DTB_PATH" tina_files/sunxi.dtb
-            echo "✅ Found existing DTB: $DTB_PATH"
-        else
-            echo "⚠️ Existing DTB not found. Manually compiling..."
-            if [ -f "files/sun8i-t113-tronlong-minievm.dts" ]; then
-                dtc -I dts -O dtb -o tina_files/sunxi.dtb files/sun8i-t113-tronlong-minievm.dts
-                echo "✅ DTB manually compiled: sunxi.dtb"
-            else
-                echo "❌ Source DTS file missing!"
-            fi
-        fi
-        
-        # ----------------------------------------------------------------------
-        # 4. 文件系统 (rootfs.ext4)
-        # ----------------------------------------------------------------------
-        echo "Searching for rootfs.ext4..."
-        ROOTFS_GZ=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4.gz" -type f | head -n 1)
-        
-        if [ -f "$ROOTFS_GZ" ]; then
-            echo "✅ Found compressed rootfs: $ROOTFS_GZ"
-            cp "$ROOTFS_GZ" tina_files/rootfs.ext4.gz
-            gzip -d -f tina_files/rootfs.ext4.gz
-            echo "   -> Decompressed: rootfs.ext4"
-        else
-            # 备选：找未压缩的
-            ROOTFS_RAW=$(find build_dir/target-*/linux-*/ -name "root.ext4" -type f | head -n 1)
-            if [ -f "$ROOTFS_RAW" ]; then
-                cp -v "$ROOTFS_RAW" tina_files/rootfs.ext4
-                echo "✅ Found raw rootfs: rootfs.ext4"
-            else
-                echo "❌ Error: rootfs.ext4 NOT FOUND!"
-            fi
-        fi
+        # 1. 查找生成的组件
+        ZIMAGE=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/ -name "zImage" | head -n 1)
+        DTB=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/dts/ -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
+        ROOTFS=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4" | head -n 1)
 
-        echo "=== Transplant Kit Content ==="
-        ls -lh tina_files/
+        # 2. 封装 Android boot.img (基地址 0x40000000, 内核偏移 0x8000)
+        mkbootimg --kernel "$ZIMAGE" \
+                  --dtb "$DTB" \
+                  --base 0x40000000 \
+                  --kernel_offset 0x00008000 \
+                  --ramdisk_offset 0x01000000 \
+                  --tags_offset 0x00000100 \
+                  --pagesize 2048 \
+                  --cmdline "console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait panic=10" \
+                  -o output/boot.img
 
-    - name: Upload Tina Transplant Kit
+        # 3. 硬缝合物理镜像 (1 Sector = 512B)
+        RAW_IMG="output/t113-openwrt-tlt113-sd.img"
+        dd if=/dev/zero of=$RAW_IMG bs=1M count=600
+
+        # A. 写入 TOC0 (sboot) -> 偏移 8KB (Sector 16)
+        dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
+
+        # B. 写入 TOC1 (boot_package) -> 偏移 128KB (Sector 256)
+        dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
+
+        # C. 写入 P4 分区 (boot.img) -> 偏移 16MB (Sector 32768)
+        dd if=output/boot.img of=$RAW_IMG bs=512 seek=32768 conv=notrunc
+
+        # D. 写入 P5 分区 (rootfs.ext4) -> 偏移 64MB (Sector 131072)
+        dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=131072 conv=notrunc
+
+        echo "Firmware Stitched Successfully."
+
+    - name: Upload Artifacts
       uses: actions/upload-artifact@main
       if: (!cancelled())
       with:
-        name: Tina_Transplant_Kit
-        path: openwrt/tina_files/
-    # ==============================================================================
-
-    - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@main
-      with:
-        retain_days: 0
-        keep_minimum_runs: 2
+        name: T113_OpenWrt_Final_Image
+        path: openwrt/output/*.img

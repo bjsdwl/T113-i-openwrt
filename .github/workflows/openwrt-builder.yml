@@ -55,9 +55,8 @@ jobs:
 
     - name: Compile the firmware
       run: cd openwrt && make -j$(nproc) || make -j1 V=s
-
-    # ==============================================================================
-    # 🏗️ 物理镜像硬缝合 (Secure Boot & Android Boot Image)
+# ==============================================================================
+    # 🏗️ 物理镜像硬缝合 (增强容错版)
     # ==============================================================================
     - name: Final Image Stitching
       if: (!cancelled())
@@ -65,16 +64,37 @@ jobs:
         cd openwrt
         mkdir -p output
         
-        # 1. 自动定位内核和文件系统
-        ZIMAGE=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/ -name "zImage" | head -n 1)
-        DTB=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/dts/ -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
-        ROOTFS=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4" | head -n 1)
-
-        echo "Found Kernel: $ZIMAGE"
-        echo "Found DTB: $DTB"
+        echo ">>> Debugging: Searching for build artifacts..."
+        # 1. 全局搜索 zImage (不再依赖特定路径)
+        ZIMAGE=$(find . -type f -name "zImage" ! -name "*initramfs*" | head -n 1)
         
-        # 2. 封装 Android boot.img (P4 分区)
-        # 参数说明：Base 0x40000000, Kernel Offset 0x8000 (即 0x40008000), 无 Ramdisk
+        # 2. 全局搜索 DTB
+        DTB=$(find . -type f -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
+        
+        # 3. 全局搜索 Rootfs
+        ROOTFS=$(find . -type f -name "*rootfs.ext4" | head -n 1)
+
+        echo "---------------------------------------------"
+        echo "Captured Kernel: $ZIMAGE"
+        echo "Captured DTB:    $DTB"
+        echo "Captured Rootfs: $ROOTFS"
+        echo "---------------------------------------------"
+
+        # 4. 关键检查：如果找不到内核，说明编译阶段其实失败了
+        if [ -z "$ZIMAGE" ]; then
+            echo "❌ Error: zImage not found! Compilation likely failed."
+            echo ">>> Listing build_dir for debugging:"
+            ls -d build_dir/* || echo "build_dir not found"
+            exit 1
+        fi
+
+        if [ -z "$DTB" ]; then
+            echo "❌ Error: DTB file not found! Check if device tree compiled."
+            exit 1
+        fi
+
+        # 5. 封装 Android boot.img
+        echo ">>> Generating boot.img..."
         python3 /usr/local/bin/mkbootimg --kernel "$ZIMAGE" \
                   --ramdisk /dev/null \
                   --dtb "$DTB" \
@@ -86,30 +106,34 @@ jobs:
                   --cmdline "console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait panic=10" \
                   -o output/boot.img
 
-        # 3. 缝合 RAW 镜像 (单位: Sector = 512Bytes)
+        # 6. 缝合 RAW 镜像
+        echo ">>> Stitching Final SD Card Image..."
         RAW_IMG="output/T113-OpenWrt-SD-Stitched.img"
-        # 创建 600MB 空白镜像
-        dd if=/dev/zero of=$RAW_IMG bs=1M count=600 status=progress
+        dd if=/dev/zero of=$RAW_IMG bs=1M count=600 status=none
 
         # A. TOC0 (sboot) -> 偏移 8KB (Sector 16)
-        dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
+        if [ -f "files/sboot.bin" ]; then
+            dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
+        else
+            echo "⚠️ Warning: sboot.bin not found in files/! Image will not boot."
+        fi
 
         # B. TOC1 (boot_package) -> 偏移 128KB (Sector 256)
-        dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
+        if [ -f "files/boot_package.fex" ]; then
+            dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
+        else
+            echo "⚠️ Warning: boot_package.fex not found in files/!"
+        fi
 
         # C. P4 (boot.img) -> 偏移 16MB (Sector 32768)
         dd if=output/boot.img of=$RAW_IMG bs=512 seek=32768 conv=notrunc
 
         # D. P5 (rootfs.ext4) -> 偏移 64MB (Sector 131072)
-        # 注意：这里假设 P4 分区大小小于 48MB (64-16)，如果 boot.img 很大需调整
-        dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=131072 conv=notrunc
+        if [ -n "$ROOTFS" ]; then
+            dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=131072 conv=notrunc
+        else
+             echo "⚠️ Warning: Rootfs not found, skipping P5 write."
+        fi
 
-        echo "✅ Stitched Image Created: $RAW_IMG"
+        echo "✅ Success! Final Image created at: $RAW_IMG"
         ls -lh output/
-
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@main
-      if: (!cancelled())
-      with:
-        name: T113_OpenWrt_Final_RAW
-        path: openwrt/output/*.img

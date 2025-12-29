@@ -23,8 +23,14 @@ jobs:
     - name: Initialization environment
       run: |
         sudo apt-get update
-        sudo apt-get install -y build-essential libncurses5-dev gawk git gettext swig python3-distutils python3-setuptools python3-dev u-boot-tools device-tree-compiler qemu-utils
-        pip3 install mkbootimg
+        sudo apt-get install -y build-essential libncurses5-dev gawk git gettext swig python3-distutils python3-setuptools python3-dev u-boot-tools device-tree-compiler qemu-utils wget
+        
+        # 修复 mkbootimg 安装问题：直接下载 AOSP 标准脚本
+        sudo wget https://raw.githubusercontent.com/osm0sis/mkbootimg/master/mkbootimg.py -O /usr/local/bin/mkbootimg
+        sudo chmod +x /usr/local/bin/mkbootimg
+        
+        # 验证工具是否可用
+        mkbootimg --help || python3 /usr/local/bin/mkbootimg --help
 
     - name: Clone source code
       run: |
@@ -51,7 +57,7 @@ jobs:
       run: cd openwrt && make -j$(nproc) || make -j1 V=s
 
     # ==============================================================================
-    # 🏗️ 物理镜像硬缝合 (Secure Boot & Android Boot Image)
+    # 🏗️ 物理镜像硬缝合 (使用 python3 执行下载的脚本)
     # ==============================================================================
     - name: Final Image Stitching
       if: (!cancelled())
@@ -64,8 +70,8 @@ jobs:
         DTB=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/dts/ -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
         ROOTFS=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4" | head -n 1)
 
-        # 2. 封装 Android boot.img (基地址 0x40000000, 内核偏移 0x8000)
-        mkbootimg --kernel "$ZIMAGE" \
+        # 2. 封装 Android boot.img (明确使用 python3 调用脚本)
+        python3 /usr/local/bin/mkbootimg --kernel "$ZIMAGE" \
                   --dtb "$DTB" \
                   --base 0x40000000 \
                   --kernel_offset 0x00008000 \
@@ -75,7 +81,7 @@ jobs:
                   --cmdline "console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait panic=10" \
                   -o output/boot.img
 
-        # 3. 硬缝合物理镜像 (1 Sector = 512B)
+        # 3. 硬缝合物理镜像
         RAW_IMG="output/t113-openwrt-tlt113-sd.img"
         dd if=/dev/zero of=$RAW_IMG bs=1M count=600
 
@@ -85,10 +91,10 @@ jobs:
         # B. 写入 TOC1 (boot_package) -> 偏移 128KB (Sector 256)
         dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
 
-        # C. 写入 P4 分区 (boot.img) -> 偏移 16MB (Sector 32768)
+        # C. 写入 P4 (boot.img) -> 偏移 16MB (Sector 32768)
         dd if=output/boot.img of=$RAW_IMG bs=512 seek=32768 conv=notrunc
 
-        # D. 写入 P5 分区 (rootfs.ext4) -> 偏移 64MB (Sector 131072)
+        # D. 写入 P5 (rootfs) -> 偏移 64MB (Sector 131072)
         dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=131072 conv=notrunc
 
         echo "Firmware Stitched Successfully."

@@ -25,17 +25,21 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5-dev gawk git gettext swig python3-distutils python3-setuptools python3-dev u-boot-tools device-tree-compiler qemu-utils wget
         
-        # [修复] 使用 LineageOS 稳定镜像源下载 mkbootimg.py
+        # 1. 修复 mkbootimg：使用 LineageOS 稳定源
         sudo wget https://raw.githubusercontent.com/LineageOS/android_system_tools_mkbootimg/lineage-18.1/mkbootimg.py -O /usr/local/bin/mkbootimg
         sudo chmod +x /usr/local/bin/mkbootimg
         
-        # 验证工具是否可用
-        python3 /usr/local/bin/mkbootimg --help
+        # 2. 修复工作目录权限 (解决 Permission denied)
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
 
     - name: Clone source code
+      working-directory: /workdir
       run: |
+        echo "Cloning into /workdir/openwrt..."
         git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf $GITHUB_WORKSPACE/openwrt /workdir
+        # 将工作目录链接回 GitHub Workspace，方便后续步骤访问
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Load custom feeds
       run: |
@@ -55,7 +59,8 @@ jobs:
 
     - name: Compile the firmware
       run: cd openwrt && make -j$(nproc) || make -j1 V=s
-# ==============================================================================
+
+    # ==============================================================================
     # 🏗️ 物理镜像硬缝合 (增强容错版)
     # ==============================================================================
     - name: Final Image Stitching
@@ -116,24 +121,3 @@ jobs:
             dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
         else
             echo "⚠️ Warning: sboot.bin not found in files/! Image will not boot."
-        fi
-
-        # B. TOC1 (boot_package) -> 偏移 128KB (Sector 256)
-        if [ -f "files/boot_package.fex" ]; then
-            dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
-        else
-            echo "⚠️ Warning: boot_package.fex not found in files/!"
-        fi
-
-        # C. P4 (boot.img) -> 偏移 16MB (Sector 32768)
-        dd if=output/boot.img of=$RAW_IMG bs=512 seek=32768 conv=notrunc
-
-        # D. P5 (rootfs.ext4) -> 偏移 64MB (Sector 131072)
-        if [ -n "$ROOTFS" ]; then
-            dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=131072 conv=notrunc
-        else
-             echo "⚠️ Warning: Rootfs not found, skipping P5 write."
-        fi
-
-        echo "✅ Success! Final Image created at: $RAW_IMG"
-        ls -lh output/

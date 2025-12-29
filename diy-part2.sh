@@ -16,7 +16,6 @@ if [ -f "files/$DTS_FILENAME" ]; then
 fi
 
 # 2. 修改 OpenWrt 构建机型定义
-# 使用 nanopi_neo 作为 U-Boot 占位符，绕过编译错误
 if ! grep -q "Device/tronlong_tlt113-minievm" "$TARGET_MK"; then
 cat <<EOF >> "$TARGET_MK"
 

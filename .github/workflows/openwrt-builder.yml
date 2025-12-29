@@ -24,9 +24,13 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5-dev gawk git gettext swig python3-distutils python3-setuptools python3-dev u-boot-tools device-tree-compiler qemu-utils wget
-        # 下载 AOSP 官方标准的 mkbootimg 脚本 (支持 --dtb 参数)
-        sudo wget https://raw.githubusercontent.com/aosp-mirror/platform_system_tools_mkbootimg/master/mkbootimg.py -O /usr/local/bin/mkbootimg
+        
+        # [修复] 使用 LineageOS 稳定镜像源下载 mkbootimg.py
+        sudo wget https://raw.githubusercontent.com/LineageOS/android_system_tools_mkbootimg/lineage-18.1/mkbootimg.py -O /usr/local/bin/mkbootimg
         sudo chmod +x /usr/local/bin/mkbootimg
+        
+        # 验证工具是否可用
+        python3 /usr/local/bin/mkbootimg --help
 
     - name: Clone source code
       run: |
@@ -52,6 +56,9 @@ jobs:
     - name: Compile the firmware
       run: cd openwrt && make -j$(nproc) || make -j1 V=s
 
+    # ==============================================================================
+    # 🏗️ 物理镜像硬缝合 (Secure Boot & Android Boot Image)
+    # ==============================================================================
     - name: Final Image Stitching
       if: (!cancelled())
       run: |
@@ -63,8 +70,11 @@ jobs:
         DTB=$(find build_dir/target-*/linux-*/linux-*/arch/arm/boot/dts/ -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
         ROOTFS=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4" | head -n 1)
 
+        echo "Found Kernel: $ZIMAGE"
+        echo "Found DTB: $DTB"
+        
         # 2. 封装 Android boot.img (P4 分区)
-        # 按照清单：Base 0x40000000, Kernel 0x8000, Pagesize 2048, 无 ramdisk (使用 /dev/null)
+        # 参数说明：Base 0x40000000, Kernel Offset 0x8000 (即 0x40008000), 无 Ramdisk
         python3 /usr/local/bin/mkbootimg --kernel "$ZIMAGE" \
                   --ramdisk /dev/null \
                   --dtb "$DTB" \
@@ -76,23 +86,26 @@ jobs:
                   --cmdline "console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait panic=10" \
                   -o output/boot.img
 
-        # 3. 缝合 RAW 镜像 (严格遵循 Sector 偏移)
+        # 3. 缝合 RAW 镜像 (单位: Sector = 512Bytes)
         RAW_IMG="output/T113-OpenWrt-SD-Stitched.img"
-        dd if=/dev/zero of=$RAW_IMG bs=1M count=800
+        # 创建 600MB 空白镜像
+        dd if=/dev/zero of=$RAW_IMG bs=1M count=600 status=progress
 
-        # A. TOC0 (sboot) -> 8KB (Sector 16)
+        # A. TOC0 (sboot) -> 偏移 8KB (Sector 16)
         dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
 
-        # B. TOC1 (boot_package) -> 128KB (Sector 256)
+        # B. TOC1 (boot_package) -> 偏移 128KB (Sector 256)
         dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
 
-        # C. P4 (boot.img) -> 16MB (Sector 32768)
+        # C. P4 (boot.img) -> 偏移 16MB (Sector 32768)
         dd if=output/boot.img of=$RAW_IMG bs=512 seek=32768 conv=notrunc
 
-        # D. P5 (rootfs.ext4) -> 64MB (Sector 131072)
+        # D. P5 (rootfs.ext4) -> 偏移 64MB (Sector 131072)
+        # 注意：这里假设 P4 分区大小小于 48MB (64-16)，如果 boot.img 很大需调整
         dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=131072 conv=notrunc
 
-        echo "✅ Stitched Image: $RAW_IMG"
+        echo "✅ Stitched Image Created: $RAW_IMG"
+        ls -lh output/
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@main

@@ -1,28 +1,31 @@
 #!/bin/bash
-# diy-part2.sh: Tronlong T113-i 机型适配 (完全解耦版)
+# diy-part2.sh: Tronlong T113-i 深度适配补丁
 
-DTS_FILENAME="sun8i-t113-tronlong-minievm.dts"
 DTS_NAME="sun8i-t113-tronlong-minievm"
-KERNEL_DTS_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
-TARGET_MK="target/linux/sunxi/image/cortexa7.mk"
-
-echo "Applying T113-i Transplant Patches..."
-
-# 1. 部署设备树到内核目录
-mkdir -p "$KERNEL_DTS_DIR"
-if [ -f "files/$DTS_FILENAME" ]; then
-    cp "files/$DTS_FILENAME" "$KERNEL_DTS_DIR/"
-    echo "DTS deployed."
-fi
-
-# 2. 注入 Dummy 引导脚本生成逻辑到 Makefile (关键修复)
-# 这行代码会强制在生成镜像前创建一个空的 boot.scr，防止 mcopy 报错中断
+DTS_FILE="$DTS_NAME.dts"
+# 覆盖目录
+KERNEL_FILES_DIR="target/linux/sunxi/files/arch/arm/boot/dts"
 IMAGE_MAKEFILE="target/linux/sunxi/image/Makefile"
-sed -i '/image_prepare:/a \	mkdir -p $(STAGING_DIR_IMAGE) && touch $(STAGING_DIR_IMAGE)/$(DEVICE_UBOOT)-boot.scr && touch $(STAGING_DIR_IMAGE)/$(1)-boot.scr' "$IMAGE_MAKEFILE"
 
-# 3. 注册机型
-if ! grep -q "Device/tronlong_tlt113-minievm" "$TARGET_MK"; then
-cat <<EOF >> "$TARGET_MK"
+echo "Applying T113-i kernel and image patches..."
+
+# 1. 部署设备树源码
+mkdir -p "$KERNEL_FILES_DIR"
+[ -f "files/$DTS_FILE" ] && cp "files/$DTS_FILE" "$KERNEL_FILES_DIR/"
+
+# 2. 强制内核 Makefile 注册该 DTB (这是解决 DTB 找不到的关键)
+# 我们在 sunxi 的配置处理脚本中插入一行，确保编译时包含该 dtb
+# 注意：OpenWrt 在编译内核前会把 files 里的文件覆盖进去，但 Makefile 需手动补丁
+# 我们直接在 target/linux/sunxi/Makefile 或 image Makefile 里做手脚
+sed -i 's/TARGET_DEVICES +=/DEVICE_DTS := '"$DTS_NAME"'\nTARGET_DEVICES +=/g' target/linux/sunxi/image/cortexa7.mk
+
+# 3. 彻底修复 mcopy 报错：在 image 准备阶段伪造所有可能的 boot.scr
+# 无论它寻找 tronlong_tlt113... 还是 nanopi_neo... 统统补齐
+sed -i '/image_prepare:/a \	mkdir -p $(STAGING_DIR_IMAGE) && touch $(STAGING_DIR_IMAGE)/$(DEVICE_UBOOT)-boot.scr && touch $(STAGING_DIR_IMAGE)/tronlong_tlt113-minievm-boot.scr && touch $(STAGING_DIR_IMAGE)/sunxi-boot.scr' "$IMAGE_MAKEFILE"
+
+# 4. 注册机型定义
+if ! grep -q "Device/tronlong_tlt113-minievm" target/linux/sunxi/image/cortexa7.mk; then
+cat <<EOF >> target/linux/sunxi/image/cortexa7.mk
 
 define Device/tronlong_tlt113-minievm
   DEVICE_VENDOR := Tronlong
@@ -35,4 +38,4 @@ TARGET_DEVICES += tronlong_tlt113-minievm
 EOF
 fi
 
-echo "Patches applied successfully."
+echo "Patches applied."

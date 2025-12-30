@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt for Tronlong T113-i (Session 3 Final Stitched)
+# Description: Build OpenWrt for Tronlong T113-i (Session 4 Final Fixed)
 #
 
 name: OpenWrt Builder
@@ -31,11 +31,11 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
+        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools gdisk
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         
-        # 下载官方 mkbootimg 工具 (LineageOS 稳定版)
+        # 下载官方 mkbootimg 工具
         sudo wget https://raw.githubusercontent.com/LineageOS/android_system_tools_mkbootimg/lineage-18.1/mkbootimg.py -O /usr/local/bin/mkbootimg
         sudo chmod +x /usr/local/bin/mkbootimg
         
@@ -72,7 +72,7 @@ jobs:
         make -j$(nproc) || echo "Compilation finished with image-packaging errors. Proceeding to manual stitch..."
 
     # ==============================================================================
-    # 🏗️ 物理镜像精准缝合 (v3.8 适配创龙 GPT 物理布局)
+    # 🏗️ 物理镜像精准缝合 (v4.0 适配创龙内存对齐要求)
     # ==============================================================================
     - name: Final Image Stitching
       if: (!cancelled())
@@ -81,10 +81,8 @@ jobs:
         mkdir -p output
         
         echo ">>> Locating OpenWrt Build Artifacts..."
-        # 1. 查找主线内核 zImage
         ZIMAGE=$(find build_dir/target-arm_*/ -name zImage | head -n 1)
         
-        # 2. 现场手动编译设备树 DTB (确保 100% 存在且最新)
         if [ -f "files/sun8i-t113-tronlong-minievm.dts" ]; then
             echo "Compiling DTS manually..."
             dtc -I dts -O dtb -o output/sun8i-t113-tronlong-minievm.dtb files/sun8i-t113-tronlong-minievm.dts
@@ -93,28 +91,22 @@ jobs:
             DTB=$(find build_dir/target-arm_*/ -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
         fi
         
-        # 3. 查找 Rootfs
         ROOTFS=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4" | head -n 1)
         [ -z "$ROOTFS" ] && ROOTFS=$(find build_dir/target-arm_*/ -name "root.ext4" | head -n 1)
 
-        echo "---------------------------------------"
-        echo "Final Kernel Path: $ZIMAGE"
-        echo "Final DTB Path:    $DTB"
-        echo "Final Rootfs Path: $ROOTFS"
-        echo "---------------------------------------"
-
         if [ -z "$ZIMAGE" ] || [ -z "$ROOTFS" ]; then
-            echo "❌ ERROR: Critical artifacts missing! Check compilation logs."
+            echo "❌ ERROR: Critical artifacts missing!"
             exit 1
         fi
 
-        # 4. 封装 Android boot.img (用于 U-Boot bootm 引导)
-        # 包含主线内核和最新 DTB
+        # 4. 封装 Android boot.img
+        # 核心修正：
+        # --base 必须设为 0x45000000 且 kernel_offset 为 0，确保 U-Boot 校验匹配且不发生搬运冲突
         python3 /usr/local/bin/mkbootimg --kernel "$ZIMAGE" \
                   --ramdisk /dev/null \
                   --dtb "$DTB" \
-                  --base 0x40000000 \
-                  --kernel_offset 0x00008000 \
+                  --base 0x45000000 \
+                  --kernel_offset 0x00000000 \
                   --ramdisk_offset 0x01000000 \
                   --tags_offset 0x00000100 \
                   --pagesize 2048 \
@@ -125,30 +117,27 @@ jobs:
         RAW_IMG="output/T113-OpenWrt-SD-Final.img"
         dd if=/dev/zero of=$RAW_IMG bs=1M count=600 status=none
 
-        # 6. 精准物理注入 (基于创龙 GPT LBA 偏移量)
-        echo ">>> Injecting components at specific LBA offsets..."
+        # 6. 精准物理注入 (LBA 偏移)
+        echo ">>> Injecting components..."
+        [ -f "files/sboot.bin" ] && dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
+        [ -f "files/boot_package.fex" ] && dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
         
-        # A. TOC0 (sboot) -> 偏移 8KB (Sector 16)
-        if [ -f "files/sboot.bin" ]; then
-            dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
-        fi
-        
-        # B. TOC1 (boot_package) -> 偏移 128KB (Sector 256)
-        if [ -f "files/boot_package.fex" ]; then
-            dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
-        fi
-
-        # C. Part 4: boot 分区 (OpenWrt boot.img) -> 关键偏移 112262 扇区
+        # 写入 boot 分区 (偏移 112262)
         dd if=output/boot.img of=$RAW_IMG bs=512 seek=112262 conv=notrunc
-
-        # D. Part 5: rootfs 分区 (OpenWrt Rootfs) -> 关键偏移 147462 扇区
+        # 写入 rootfs 分区 (偏移 147462)
         dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=147462 conv=notrunc
+
+        # 7. 写入 GPT 分区表 (关键：解决 Rootfs 无法识别问题)
+        echo ">>> Synchronizing GPT Partition Table..."
+        sgdisk -o $RAW_IMG
+        # 分区 4: boot
+        sgdisk -a 1 -n 4:112262:147461 -c 4:"boot" -t 4:8300 $RAW_IMG
+        # 分区 5: rootfs
+        sgdisk -a 1 -n 5:147462:1200000 -c 5:"rootfs" -t 5:8300 $RAW_IMG
 
         echo "✅ DONE: Image generated successfully."
 
     - name: Upload Artifacts
-      uses: actions/upload-artifact@main
-      if: (!cancelled())
       with:
         name: T113_OpenWrt_Final_Image
         path: openwrt/output/*.img

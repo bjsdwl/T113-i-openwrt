@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt for Tronlong T113-i (Session 4 Final Fixed)
+# Description: Build OpenWrt for Tronlong T113-i (Session 4 Final Fixed V2)
 #
 
 name: OpenWrt Builder
@@ -138,6 +138,8 @@ jobs:
         echo "✅ DONE: Image generated successfully."
 
     - name: Upload Artifacts
+      uses: actions/upload-artifact@main
+      if: (!cancelled())
       with:
         name: T113_OpenWrt_Final_Image
         path: openwrt/output/*.img

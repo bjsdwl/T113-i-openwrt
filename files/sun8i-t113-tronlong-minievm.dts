@@ -100,25 +100,19 @@
     leds {
         compatible = "gpio-leds";
 
-        led-0 {
-            function = "heartbeat";
-            color = <2>;
+        led0 {
             label = "tlt113:green:heartbeat";
             gpios = <&pio 2 0 0>;
             linux,default-trigger = "heartbeat";
         };
 
-        led-1 {
-            function = "disk";
-            color = <2>;
+        led1 {
             label = "tlt113:green:disk";
             gpios = <&pio 2 1 0>;
             linux,default-trigger = "activity";
         };
 
-        led-2 {
-            function = "user";
-            color = <2>;
+        led2 {
             label = "tlt113:green:user";
             gpios = <&pio 6 11 0>;
         };
@@ -203,11 +197,6 @@
                 function = "spi0";
             };
 
-            spi0_cs0_pin: spi0-cs0-pin {
-                pins = "PC3";
-                function = "spi0";
-            };
-
             mmc0_pins: mmc0-pins {
                 pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
                 function = "mmc0";
@@ -276,14 +265,12 @@
                 ports {
                     #address-cells = <1>;
                     #size-cells = <0>;
-
                     port@0 {
                         reg = <0>;
                         lt8912_in: endpoint {
                             remote-endpoint = <&dsi_out_bridge>;
                         };
                     };
-
                     port@1 {
                         reg = <1>;
                         lt8912_out: endpoint {
@@ -305,24 +292,20 @@
             #size-cells = <0>;
             status = "okay";
             pinctrl-names = "default";
-            pinctrl-0 = <&spi0_pins>, <&spi0_cs0_pin>;
+            pinctrl-0 = <&spi0_pins>;
 
             flash@0 {
                 compatible = "spi-nand";
                 reg = <0>;
                 spi-max-frequency = <50000000>;
-
                 partitions {
                     compatible = "fixed-partitions";
                     #address-cells = <1>;
                     #size-cells = <1>;
-
                     partition@0 {
                         label = "u-boot";
                         reg = <0x000000 0x200000>;
-                        read-only;
                     };
-
                     partition@200000 {
                         label = "ubi";
                         reg = <0x200000 0xfe00000>;
@@ -351,16 +334,12 @@
                 compatible = "snps,dwmac-mdio";
                 #address-cells = <1>;
                 #size-cells = <0>;
-
                 ext_rgmii_phy: ethernet-phy@1 {
                     compatible = "ethernet-phy-ieee802.3-c22";
                     reg = <1>;
                     reset-gpios = <&pio 6 13 1>;
                     reset-assert-us = <20000>;
                     reset-deassert-us = <150000>;
-                    motorcomm,clk-out-frequency-hz = <125000000>;
-                    motorcomm,keep-pll-enabled;
-                    motorcomm,auto-sleep-disabled;
                 };
             };
         };
@@ -460,15 +439,9 @@
             resets = <&ccu 1>;
             interrupts = <0 94 4>;
             status = "okay";
-
-            display_engine_output: output {
-                reg = <0>;
+            output {
                 port {
-                    #address-cells = <1>;
-                    #size-cells = <0>;
-
-                    display_engine_out_tcon0: endpoint@0 {
-                        reg = <0>;
+                    display_engine_out_tcon0: endpoint {
                         remote-endpoint = <&tcon_lcd0_in_display_engine>;
                     };
                 };
@@ -478,4 +451,66 @@
         tcon_lcd0: lcd-controller@5461000 {
             compatible = "allwinner,sun20i-d1-tcon-lcd";
             reg = <0x05461000 0x1000>;
-            interrupts =
+            interrupts = <0 95 4>;
+            clocks = <&ccu 113>, <&ccu 112>;
+            clock-names = "ahb", "tcon";
+            resets = <&ccu 52>, <&ccu 54>;
+            reset-names = "lcd", "lvds";
+            status = "okay";
+            ports {
+                #address-cells = <1>;
+                #size-cells = <0>;
+                port@0 {
+                    reg = <0>;
+                    tcon_lcd0_in_display_engine: endpoint {
+                        remote-endpoint = <&display_engine_out_tcon0>;
+                    };
+                };
+                port@1 {
+                    reg = <1>;
+                    tcon_lcd0_out_dsi: endpoint {
+                        remote-endpoint = <&dsi_in_tcon_lcd0>;
+                    };
+                };
+            };
+        };
+
+        dsi: dsi@5450000 {
+            compatible = "allwinner,sun20i-d1-mipi-dsi";
+            reg = <0x05450000 0x1000>;
+            interrupts = <0 98 4>;
+            clocks = <&ccu 111>, <&ccu 110>;
+            clock-names = "bus", "mod";
+            resets = <&ccu 51>;
+            phys = <&dphy>;
+            phy-names = "dphy";
+            status = "okay";
+            ports {
+                #address-cells = <1>;
+                #size-cells = <0>;
+                port@0 {
+                    reg = <0>;
+                    dsi_in_tcon_lcd0: endpoint {
+                        remote-endpoint = <&tcon_lcd0_out_dsi>;
+                    };
+                };
+                port@1 {
+                    reg = <1>;
+                    dsi_out_bridge: endpoint {
+                        remote-endpoint = <&lt8912_in>;
+                    };
+                };
+            };
+        };
+
+        dphy: d-phy@5460000 {
+            compatible = "allwinner,sun20i-d1-mipi-dphy";
+            reg = <0x05460000 0x1000>;
+            clocks = <&ccu 111>, <&ccu 110>;
+            clock-names = "bus", "mod";
+            resets = <&ccu 51>;
+            status = "okay";
+            #phy-cells = <0>;
+        };
+    };
+};

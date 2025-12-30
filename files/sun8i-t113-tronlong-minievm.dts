@@ -382,6 +382,7 @@
             clock-names = "usb0_phy", "usb1_phy";
             resets = <&ccu 40>, <&ccu 41>;
             reset-names = "usb0_reset", "usb1_reset";
+            #phy-cells = <1>; /* 添加这一行消除警告 */
             status = "okay";
             usb1_vbus-supply = <&reg_usb1_vbus>;
         };

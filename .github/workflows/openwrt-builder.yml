@@ -1,6 +1,12 @@
+#
+# https://github.com/P3TERX/Actions-OpenWrt
+# Description: Build OpenWrt for Tronlong T113-i (Session 3 Final Stitched)
+#
+
 name: OpenWrt Builder
 
 on:
+  repository_dispatch:
   workflow_dispatch:
 
 env:
@@ -22,10 +28,17 @@ jobs:
 
     - name: Initialization environment
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential libncurses5-dev gawk git gettext swig python3-distutils python3-setuptools python3-dev u-boot-tools device-tree-compiler qemu-utils wget
+        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        sudo docker image prune --all --force
+        sudo -E apt-get -qq update
+        sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev u-boot-tools
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        
+        # 下载官方 mkbootimg 工具 (LineageOS 稳定版)
         sudo wget https://raw.githubusercontent.com/LineageOS/android_system_tools_mkbootimg/lineage-18.1/mkbootimg.py -O /usr/local/bin/mkbootimg
         sudo chmod +x /usr/local/bin/mkbootimg
+        
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
@@ -54,10 +67,12 @@ jobs:
     - name: Compile the firmware
       run: |
         cd openwrt
-        make -j$(nproc) || echo "Compilation finished with image errors. Proceeding to manual stitch..."
+        echo -e "$(nproc) thread compile"
+        # 允许打包报错，后续手动缝合
+        make -j$(nproc) || echo "Compilation finished with image-packaging errors. Proceeding to manual stitch..."
 
- # ==============================================================================
-    # 🏗️ 物理镜像硬缝合 (v3.2 终极容错版)
+    # ==============================================================================
+    # 🏗️ 物理镜像精准缝合 (v3.8 适配创龙 GPT 物理布局)
     # ==============================================================================
     - name: Final Image Stitching
       if: (!cancelled())
@@ -65,40 +80,36 @@ jobs:
         cd openwrt
         mkdir -p output
         
-        echo ">>> Locating Kernel..."
-        # 排除 initramfs，精准定位 zImage
-        ZIMAGE=$(find build_dir/target-arm_*/linux-sunxi_cortexa7/ -name zImage | head -n 1)
+        echo ">>> Locating OpenWrt Build Artifacts..."
+        # 1. 查找主线内核 zImage
+        ZIMAGE=$(find build_dir/target-arm_*/ -name zImage | head -n 1)
         
-        echo ">>> Locating Rootfs..."
-        # 优先在 bin 目录找，找不到去 build_dir 找
-        ROOTFS=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4" | head -n 1)
-        [ -z "$ROOTFS" ] && ROOTFS=$(find build_dir/target-arm_*/linux-sunxi_cortexa7/ -name "root.ext4" | head -n 1)
-
-        echo ">>> Locating or Force-Compiling DTB..."
-        DTB=$(find build_dir/target-arm_*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
-        
-        # 如果内核没编出来，现场硬编
-        if [ -z "$DTB" ]; then
-            echo "⚠️ DTB missing from kernel build. Hard-compiling now..."
-            if [ -f "files/sun8i-t113-tronlong-minievm.dts" ]; then
-                dtc -I dts -O dtb -o output/sun8i-t113-tronlong-minievm.dtb files/sun8i-t113-tronlong-minievm.dts
-                DTB="output/sun8i-t113-tronlong-minievm.dtb"
-            fi
+        # 2. 现场手动编译设备树 DTB (确保 100% 存在且最新)
+        if [ -f "files/sun8i-t113-tronlong-minievm.dts" ]; then
+            echo "Compiling DTS manually..."
+            dtc -I dts -O dtb -o output/sun8i-t113-tronlong-minievm.dtb files/sun8i-t113-tronlong-minievm.dts
+            DTB="output/sun8i-t113-tronlong-minievm.dtb"
+        else
+            DTB=$(find build_dir/target-arm_*/ -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
         fi
+        
+        # 3. 查找 Rootfs
+        ROOTFS=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4" | head -n 1)
+        [ -z "$ROOTFS" ] && ROOTFS=$(find build_dir/target-arm_*/ -name "root.ext4" | head -n 1)
 
         echo "---------------------------------------"
-        echo "Kernel: $ZIMAGE"
-        echo "DTB:    $DTB"
-        echo "Rootfs: $ROOTFS"
+        echo "Final Kernel Path: $ZIMAGE"
+        echo "Final DTB Path:    $DTB"
+        echo "Final Rootfs Path: $ROOTFS"
         echo "---------------------------------------"
 
-        if [ -z "$ZIMAGE" ] || [ -z "$DTB" ] || [ -z "$ROOTFS" ]; then
-            echo "❌ ERROR: One or more critical components are missing!"
-            ls -R build_dir/target-arm_*/linux-sunxi_cortexa7/ || true
+        if [ -z "$ZIMAGE" ] || [ -z "$ROOTFS" ]; then
+            echo "❌ ERROR: Critical artifacts missing! Check compilation logs."
             exit 1
         fi
 
-        # 1. 封装 Android boot.img
+        # 4. 封装 Android boot.img (用于 U-Boot bootm 引导)
+        # 包含主线内核和最新 DTB
         python3 /usr/local/bin/mkbootimg --kernel "$ZIMAGE" \
                   --ramdisk /dev/null \
                   --dtb "$DTB" \
@@ -107,22 +118,37 @@ jobs:
                   --ramdisk_offset 0x01000000 \
                   --tags_offset 0x00000100 \
                   --pagesize 2048 \
-                  --cmdline "console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait panic=10" \
+                  --cmdline "console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait panic=10 earlycon=uart8250,mmio32,0x02500000" \
                   -o output/boot.img
 
-        # 2. 物理缝合 (Sector offsets: TOC0=16, TOC1=256, P4=32768, P5=131072)
-        RAW_IMG="output/T113-OpenWrt-SD-Stitched.img"
+        # 5. 准备 600MB RAW 镜像文件
+        RAW_IMG="output/T113-OpenWrt-SD-Final.img"
         dd if=/dev/zero of=$RAW_IMG bs=1M count=600 status=none
-        [ -f "files/sboot.bin" ] && dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
-        [ -f "files/boot_package.fex" ] && dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
-        dd if=output/boot.img of=$RAW_IMG bs=512 seek=32768 conv=notrunc
-        dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=131072 conv=notrunc
 
-        echo "✅ DONE: Image generated at output/"
+        # 6. 精准物理注入 (基于创龙 GPT LBA 偏移量)
+        echo ">>> Injecting components at specific LBA offsets..."
+        
+        # A. TOC0 (sboot) -> 偏移 8KB (Sector 16)
+        if [ -f "files/sboot.bin" ]; then
+            dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
+        fi
+        
+        # B. TOC1 (boot_package) -> 偏移 128KB (Sector 256)
+        if [ -f "files/boot_package.fex" ]; then
+            dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
+        fi
+
+        # C. Part 4: boot 分区 (OpenWrt boot.img) -> 关键偏移 112262 扇区
+        dd if=output/boot.img of=$RAW_IMG bs=512 seek=112262 conv=notrunc
+
+        # D. Part 5: rootfs 分区 (OpenWrt Rootfs) -> 关键偏移 147462 扇区
+        dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=147462 conv=notrunc
+
+        echo "✅ DONE: Image generated successfully."
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@main
       if: (!cancelled())
       with:
-        name: T113_OpenWrt_SD_Image
+        name: T113_OpenWrt_Final_Image
         path: openwrt/output/*.img

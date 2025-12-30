@@ -54,11 +54,10 @@ jobs:
     - name: Compile the firmware
       run: |
         cd openwrt
-        # 即使打包阶段报错 (Error 2)，我们也继续执行，因为我们需要的是内核和文件系统二进制
-        make -j$(nproc) || echo "Compilation finished with expected image-packaging errors. Proceeding to stitch..."
+        make -j$(nproc) || echo "Compilation finished with image errors. Proceeding to manual stitch..."
 
-    # ==============================================================================
-    # 🏗️ 物理镜像硬缝合 (核心任务)
+ # ==============================================================================
+    # 🏗️ 物理镜像硬缝合 (v3.2 终极容错版)
     # ==============================================================================
     - name: Final Image Stitching
       if: (!cancelled())
@@ -66,24 +65,40 @@ jobs:
         cd openwrt
         mkdir -p output
         
-        echo ">>> Locating Kernel, DTB and Rootfs..."
-        # 全局搜索编译产物
-        ZIMAGE=$(find . -type f -name "zImage" ! -path "*/initramfs/*" | head -n 1)
-        DTB=$(find . -type f -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
-        # 优先在 bin 目录下找 rootfs，找不到再去 build_dir 找
-        ROOTFS=$(find bin/targets/ -type f -name "*rootfs.ext4" | head -n 1)
-        [ -z "$ROOTFS" ] && ROOTFS=$(find build_dir/ -type f -name "root.ext4" | head -n 1)
+        echo ">>> Locating Kernel..."
+        # 排除 initramfs，精准定位 zImage
+        ZIMAGE=$(find build_dir/target-arm_*/linux-sunxi_cortexa7/ -name zImage | head -n 1)
+        
+        echo ">>> Locating Rootfs..."
+        # 优先在 bin 目录找，找不到去 build_dir 找
+        ROOTFS=$(find bin/targets/sunxi/cortexa7/ -name "*rootfs.ext4" | head -n 1)
+        [ -z "$ROOTFS" ] && ROOTFS=$(find build_dir/target-arm_*/linux-sunxi_cortexa7/ -name "root.ext4" | head -n 1)
 
-        echo "Kernel Path: $ZIMAGE"
-        echo "DTB Path:    $DTB"
-        echo "Rootfs Path: $ROOTFS"
+        echo ">>> Locating or Force-Compiling DTB..."
+        DTB=$(find build_dir/target-arm_*/linux-sunxi_cortexa7/ -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
+        
+        # 如果内核没编出来，现场硬编
+        if [ -z "$DTB" ]; then
+            echo "⚠️ DTB missing from kernel build. Hard-compiling now..."
+            if [ -f "files/sun8i-t113-tronlong-minievm.dts" ]; then
+                dtc -I dts -O dtb -o output/sun8i-t113-tronlong-minievm.dtb files/sun8i-t113-tronlong-minievm.dts
+                DTB="output/sun8i-t113-tronlong-minievm.dtb"
+            fi
+        fi
 
-        if [ -z "$ZIMAGE" ] || [ -z "$ROOTFS" ]; then
-            echo "❌ ERROR: Essential build artifacts not found!"
+        echo "---------------------------------------"
+        echo "Kernel: $ZIMAGE"
+        echo "DTB:    $DTB"
+        echo "Rootfs: $ROOTFS"
+        echo "---------------------------------------"
+
+        if [ -z "$ZIMAGE" ] || [ -z "$DTB" ] || [ -z "$ROOTFS" ]; then
+            echo "❌ ERROR: One or more critical components are missing!"
+            ls -R build_dir/target-arm_*/linux-sunxi_cortexa7/ || true
             exit 1
         fi
 
-        # 1. 封装 Android boot.img (P4 分区)
+        # 1. 封装 Android boot.img
         python3 /usr/local/bin/mkbootimg --kernel "$ZIMAGE" \
                   --ramdisk /dev/null \
                   --dtb "$DTB" \
@@ -95,21 +110,19 @@ jobs:
                   --cmdline "console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait panic=10" \
                   -o output/boot.img
 
-        # 2. 物理缝合
+        # 2. 物理缝合 (Sector offsets: TOC0=16, TOC1=256, P4=32768, P5=131072)
         RAW_IMG="output/T113-OpenWrt-SD-Stitched.img"
         dd if=/dev/zero of=$RAW_IMG bs=1M count=600 status=none
-
-        # 按照 Session 3 交底清单物理偏移写入
         [ -f "files/sboot.bin" ] && dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
         [ -f "files/boot_package.fex" ] && dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
         dd if=output/boot.img of=$RAW_IMG bs=512 seek=32768 conv=notrunc
         dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=131072 conv=notrunc
 
-        echo "✅ RAW Image Stitched: $RAW_IMG"
+        echo "✅ DONE: Image generated at output/"
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@main
       if: (!cancelled())
       with:
-        name: T113_OpenWrt_Final_Image
+        name: T113_OpenWrt_SD_Image
         path: openwrt/output/*.img

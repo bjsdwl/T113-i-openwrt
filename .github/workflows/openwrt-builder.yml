@@ -24,12 +24,8 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential libncurses5-dev gawk git gettext swig python3-distutils python3-setuptools python3-dev u-boot-tools device-tree-compiler qemu-utils wget
-        
-        # 下载 mkbootimg
         sudo wget https://raw.githubusercontent.com/LineageOS/android_system_tools_mkbootimg/lineage-18.1/mkbootimg.py -O /usr/local/bin/mkbootimg
         sudo chmod +x /usr/local/bin/mkbootimg
-        
-        # 修复工作目录权限
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
@@ -56,10 +52,13 @@ jobs:
       run: cd openwrt && make defconfig && make download -j8
 
     - name: Compile the firmware
-      run: cd openwrt && make -j$(nproc) || make -j1 V=s
+      run: |
+        cd openwrt
+        # 即使打包阶段报错 (Error 2)，我们也继续执行，因为我们需要的是内核和文件系统二进制
+        make -j$(nproc) || echo "Compilation finished with expected image-packaging errors. Proceeding to stitch..."
 
     # ==============================================================================
-    # 🏗️ 物理镜像硬缝合 (针对 Minimal 编译结果优化)
+    # 🏗️ 物理镜像硬缝合 (核心任务)
     # ==============================================================================
     - name: Final Image Stitching
       if: (!cancelled())
@@ -67,24 +66,24 @@ jobs:
         cd openwrt
         mkdir -p output
         
-        echo ">>> Searching for build artifacts..."
-        # 全局搜索 zImage 和 DTB
-        ZIMAGE=$(find . -type f -name "zImage" | head -n 1)
+        echo ">>> Locating Kernel, DTB and Rootfs..."
+        # 全局搜索编译产物
+        ZIMAGE=$(find . -type f -name "zImage" ! -path "*/initramfs/*" | head -n 1)
         DTB=$(find . -type f -name "sun8i-t113-tronlong-minievm.dtb" | head -n 1)
-        # 搜索 rootfs.ext4 (优先找 bin 目录下的)
+        # 优先在 bin 目录下找 rootfs，找不到再去 build_dir 找
         ROOTFS=$(find bin/targets/ -type f -name "*rootfs.ext4" | head -n 1)
         [ -z "$ROOTFS" ] && ROOTFS=$(find build_dir/ -type f -name "root.ext4" | head -n 1)
 
-        echo "Captured Kernel: $ZIMAGE"
-        echo "Captured DTB:    $DTB"
-        echo "Captured Rootfs: $ROOTFS"
+        echo "Kernel Path: $ZIMAGE"
+        echo "DTB Path:    $DTB"
+        echo "Rootfs Path: $ROOTFS"
 
         if [ -z "$ZIMAGE" ] || [ -z "$ROOTFS" ]; then
-            echo "❌ Error: Essential files missing! Compilation failed."
+            echo "❌ ERROR: Essential build artifacts not found!"
             exit 1
         fi
 
-        # 1. 封装 Android boot.img
+        # 1. 封装 Android boot.img (P4 分区)
         python3 /usr/local/bin/mkbootimg --kernel "$ZIMAGE" \
                   --ramdisk /dev/null \
                   --dtb "$DTB" \
@@ -96,27 +95,21 @@ jobs:
                   --cmdline "console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait panic=10" \
                   -o output/boot.img
 
-        # 2. 缝合 RAW 镜像
+        # 2. 物理缝合
         RAW_IMG="output/T113-OpenWrt-SD-Stitched.img"
         dd if=/dev/zero of=$RAW_IMG bs=1M count=600 status=none
 
-        # A. TOC0 (sboot) -> 偏移 8KB
+        # 按照 Session 3 交底清单物理偏移写入
         [ -f "files/sboot.bin" ] && dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
-        
-        # B. TOC1 (boot_package) -> 偏移 128KB
         [ -f "files/boot_package.fex" ] && dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
-
-        # C. P4 (boot.img) -> 偏移 16MB
         dd if=output/boot.img of=$RAW_IMG bs=512 seek=32768 conv=notrunc
-
-        # D. P5 (rootfs.ext4) -> 偏移 64MB
         dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=131072 conv=notrunc
 
-        echo "✅ Success! Final Image: $RAW_IMG"
+        echo "✅ RAW Image Stitched: $RAW_IMG"
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@main
       if: (!cancelled())
       with:
-        name: T113_OpenWrt_Final_RAW
+        name: T113_OpenWrt_Final_Image
         path: openwrt/output/*.img

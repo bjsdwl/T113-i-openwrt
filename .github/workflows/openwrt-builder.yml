@@ -1,6 +1,6 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
-# Description: Build OpenWrt for Tronlong T113-i (Session 4 Final Fixed V2)
+# Description: Build OpenWrt for Tronlong T113-i (Session 5 - Final Perfection)
 #
 
 name: OpenWrt Builder
@@ -35,7 +35,7 @@ jobs:
         sudo -E apt-get -qq autoremove --purge
         sudo -E apt-get -qq clean
         
-        # 下载官方 mkbootimg 工具
+        # 下载官方 mkbootimg 工具 (LineageOS 18.1 稳定版，支持 v2 header)
         sudo wget https://raw.githubusercontent.com/LineageOS/android_system_tools_mkbootimg/lineage-18.1/mkbootimg.py -O /usr/local/bin/mkbootimg
         sudo chmod +x /usr/local/bin/mkbootimg
         
@@ -68,11 +68,11 @@ jobs:
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
-        # 允许打包报错，后续手动缝合
-        make -j$(nproc) || echo "Compilation finished with image-packaging errors. Proceeding to manual stitch..."
+        # 允许打包阶段报错，我们将执行手动缝合
+        make -j$(nproc) || echo "Compilation finished with packaging errors. Proceeding to manual stitch..."
 
     # ==============================================================================
-    # 🏗️ 物理镜像精准缝合 (v4.0 适配创龙内存对齐要求)
+    # 🏗️ 物理镜像精准缝合 (V5.0 - 0到1突破版)
     # ==============================================================================
     - name: Final Image Stitching
       if: (!cancelled())
@@ -83,8 +83,9 @@ jobs:
         echo ">>> Locating OpenWrt Build Artifacts..."
         ZIMAGE=$(find build_dir/target-arm_*/ -name zImage | head -n 1)
         
+        # 手动编译设备树，确保 Model 名为 Tronlong TLT113-MiniEVM (OpenWrt)
         if [ -f "files/sun8i-t113-tronlong-minievm.dts" ]; then
-            echo "Compiling DTS manually..."
+            echo "Compiling OpenWrt Custom DTS..."
             dtc -I dts -O dtb -o output/sun8i-t113-tronlong-minievm.dtb files/sun8i-t113-tronlong-minievm.dts
             DTB="output/sun8i-t113-tronlong-minievm.dtb"
         else
@@ -95,51 +96,64 @@ jobs:
         [ -z "$ROOTFS" ] && ROOTFS=$(find build_dir/target-arm_*/ -name "root.ext4" | head -n 1)
 
         if [ -z "$ZIMAGE" ] || [ -z "$ROOTFS" ]; then
-            echo "❌ ERROR: Critical artifacts missing!"
+            echo "❌ ERROR: Kernel or Rootfs not found!"
             exit 1
         fi
 
         # 4. 封装 Android boot.img
-        # 核心修正：
-        # --base 必须设为 0x45000000 且 kernel_offset 为 0，确保 U-Boot 校验匹配且不发生搬运冲突
+        # 使用 --header_version 2 强制包含 DTB 块，解决 6.12 内核找不到设备树问题
+        # --base 0x45000000 确保 U-Boot bootm 校验一致性
         python3 /usr/local/bin/mkbootimg --kernel "$ZIMAGE" \
                   --ramdisk /dev/null \
                   --dtb "$DTB" \
+                  --header_version 2 \
                   --base 0x45000000 \
                   --kernel_offset 0x00000000 \
                   --ramdisk_offset 0x01000000 \
                   --tags_offset 0x00000100 \
                   --pagesize 2048 \
-                  --cmdline "console=ttyS0,115200 root=/dev/mmcblk0p5 rootwait panic=10 earlycon=uart8250,mmio32,0x02500000" \
+                  --cmdline "console=ttyS0,115200 root=/dev/mmcblk1p5 rootwait panic=10 earlycon=uart8250,mmio32,0x02500000 clk_ignore_unused" \
                   -o output/boot.img
 
         # 5. 准备 600MB RAW 镜像文件
         RAW_IMG="output/T113-OpenWrt-SD-Final.img"
-        dd if=/dev/zero of=$RAW_IMG bs=1M count=600 status=none
+        dd if=/dev/zero of=$RAW_IMG bs=1M count=600
 
-        # 6. 精准物理注入 (LBA 偏移)
-        echo ">>> Injecting components..."
-        [ -f "files/sboot.bin" ] && dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
-        [ -f "files/boot_package.fex" ] && dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
+        # 6. 精准物理注入 (适配解剖出的官方偏移量)
+        echo ">>> Injecting Components to SD Image..."
         
-        # 写入 boot 分区 (偏移 112262)
+        # A. TOC0 (sboot) -> 偏移 8KB (Sector 16)
+        if [ -f "files/sboot.bin" ]; then
+            dd if=files/sboot.bin of=$RAW_IMG bs=512 seek=16 conv=notrunc
+        fi
+        
+        # B. TOC1 (boot_package) -> 偏移 128KB (Sector 256)
+        if [ -f "files/boot_package.fex" ]; then
+            dd if=files/boot_package.fex of=$RAW_IMG bs=512 seek=256 conv=notrunc
+        fi
+
+        # C. Part 4: Boot 分区 (OpenWrt boot.img) -> 官方偏移 112262 扇区
         dd if=output/boot.img of=$RAW_IMG bs=512 seek=112262 conv=notrunc
-        # 写入 rootfs 分区 (偏移 147462)
+
+        # D. Part 5: Rootfs 分区 (OpenWrt Rootfs) -> 官方偏移 147462 扇区
         dd if="$ROOTFS" of=$RAW_IMG bs=512 seek=147462 conv=notrunc
 
-        # 7. 写入 GPT 分区表 (关键：解决 Rootfs 无法识别问题)
+        # 7. 同步 GPT 分区表 (严格对齐官方 Start LBA)
         echo ">>> Synchronizing GPT Partition Table..."
         sgdisk -o $RAW_IMG
-        # 分区 4: boot
         sgdisk -a 1 -n 4:112262:147461 -c 4:"boot" -t 4:8300 $RAW_IMG
-        # 分区 5: rootfs
-        sgdisk -a 1 -n 5:147462:1200000 -c 5:"rootfs" -t 5:8300 $RAW_IMG
+        sgdisk -a 1 -n 5:147462:1100000 -c 5:"rootfs" -t 5:8300 $RAW_IMG
 
-        echo "✅ DONE: Image generated successfully."
+        # 8. 注入官方“启动卡”必备暗号 AUDISK (位于磁盘末尾)
+        echo -n "AUDISK" | dd of=$RAW_IMG bs=1 seek=$((600*1024*1024 - 1024)) conv=notrunc
+
+        echo "✅ DONE: All-in-one image generated successfully."
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@main
       if: (!cancelled())
       with:
         name: T113_OpenWrt_Final_Image
-        path: openwrt/output/*.img
+        path: |
+          openwrt/output/*.img
+          openwrt/output/boot.img

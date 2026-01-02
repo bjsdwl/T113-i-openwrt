@@ -2,7 +2,7 @@
 
 / {
     model = "Tronlong TLT113-MiniEVM (OpenWrt)";
-    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113s", "allwinner,sun8i";
+    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113s";
 
     #address-cells = <1>;
     #size-cells = <1>;
@@ -11,30 +11,33 @@
 
     aliases {
         serial0 = &uart0;
-        ethernet0 = &emac;
         mmc0 = &mmc0;
     };
 
     chosen {
         stdout-path = "serial0:115200n8";
+        /* 强制指定 bootargs，增加 initcall_debug 以便追踪挂起位置 */
+        bootargs = "console=ttyS0,115200 earlycon=uart8250,mmio32,0x02500000 root=/dev/mmcblk1p5 rootwait panic=10 initcall_debug=1 clk_ignore_unused";
     };
 
-    /* 架构定时器：解决 timer_probe 失败的关键 */
+    /* 架构定时器：修正频率与中断 */
     timer {
         compatible = "arm,armv7-timer";
-        interrupts = <1 13 0xf08>, /* Secure Phys IRQ */
-                     <1 14 0xf08>, /* Non-secure Phys IRQ */
-                     <1 11 0xf08>, /* Virtual IRQ */
-                     <1 10 0xf08>; /* Hypervisor IRQ */
+        interrupts = <1 13 0xf08>, /* GIC_PPI 13: Secure Phys */
+                     <1 14 0xf08>, /* GIC_PPI 14: Non-secure Phys */
+                     <1 11 0xf08>, /* GIC_PPI 11: Virt */
+                     <1 10 0xf08>; /* GIC_PPI 10: Hyp */
         interrupt-parent = <&gic>;
+        /* 关键：强制指定 24MHz 频率，解决官方 U-Boot 不传频率导致的 timer_probe 挂起 */
+        clock-frequency = <24000000>;
     };
 
+    /* 内存避障：严格遵循官方 OP-TEE 预留 */
     reserved-memory {
         #address-cells = <1>;
         #size-cells = <1>;
         ranges;
 
-        /* 避开 OP-TEE 区域 */
         optee_reserve: optee@41c00000 {
             reg = <0x41c00000 0x1000000>;
             no-map;
@@ -49,7 +52,7 @@
             compatible = "arm,cortex-a7";
             device_type = "cpu";
             reg = <0>;
-            clocks = <&ccu 0>;
+            clocks = <&ccu 0>; /* CLK_CPUX */
         };
 
         cpu1: cpu@1 {
@@ -82,21 +85,13 @@
         regulator-always-on;
     };
 
-    leds {
-        compatible = "gpio-leds";
-        led0 {
-            label = "tlt113:green:heartbeat";
-            gpios = <&pio 2 0 0>; /* PC0 */
-            linux,default-trigger = "heartbeat";
-        };
-    };
-
     soc {
         compatible = "simple-bus";
         #address-cells = <1>;
         #size-cells = <1>;
         ranges;
 
+        /* GIC: T113-i 专用定义 */
         gic: interrupt-controller@3021000 {
             compatible = "arm,gic-400";
             reg = <0x03021000 0x1000>,
@@ -108,8 +103,9 @@
             device_type = "interrupt-controller";
         };
 
+        /* CCU: 修正为 T113s 专用字符串 */
         ccu: clock-controller@2001000 {
-            compatible = "allwinner,sun20i-d1-ccu";
+            compatible = "allwinner,sun8i-t113s-ccu";
             reg = <0x02001000 0x1000>;
             clocks = <&osc24M>, <&osc32k>;
             clock-names = "hosc", "losc";
@@ -117,11 +113,12 @@
             #reset-cells = <1>;
         };
 
+        /* PIO: 修正为 T113s 专用字符串 */
         pio: pinctrl@2000000 {
-            compatible = "allwinner,sun20i-d1-pinctrl";
+            compatible = "allwinner,sun8i-t113s-pinctrl";
             reg = <0x02000000 0x800>;
-            interrupts = <0 14 4>, <0 15 4>;
-            clocks = <&ccu 13>, <&osc24M>, <&osc32k>;
+            interrupts = <0 14 4>, <0 15 4>; /* 中断号适配 sun8i */
+            clocks = <&ccu 13>, <&osc24M>, <&osc32k>; /* APB 时钟 */
             clock-names = "apb", "hosc", "losc";
             gpio-controller;
             #gpio-cells = <3>;
@@ -147,20 +144,20 @@
             interrupts = <0 2 4>;
             reg-shift = <2>;
             reg-io-width = <4>;
-            clocks = <&ccu 62>;
-            resets = <&ccu 18>;
+            clocks = <&ccu 62>; /* CLK_BUS_UART0 */
+            resets = <&ccu 18>; /* RST_BUS_UART0 */
             status = "okay";
             pinctrl-names = "default";
             pinctrl-0 = <&uart0_pg_pins>;
         };
 
         mmc0: mmc@4020000 {
-            compatible = "allwinner,sun20i-d1-mmc";
+            compatible = "allwinner,sun8i-t113s-mmc";
             reg = <0x04020000 0x1000>;
             interrupts = <0 39 4>;
-            clocks = <&ccu 59>, <&ccu 56>;
+            clocks = <&ccu 59>, <&ccu 56>; /* CLK_BUS_MMC0, CLK_MMC0 */
             clock-names = "ahb", "mmc";
-            resets = <&ccu 15>;
+            resets = <&ccu 15>; /* RST_BUS_MMC0 */
             reset-names = "ahb";
             pinctrl-names = "default";
             pinctrl-0 = <&mmc0_pins>;
@@ -168,18 +165,6 @@
             bus-width = <4>;
             cd-gpios = <&pio 5 6 1>; /* PF6 */
             status = "okay";
-        };
-
-        emac: ethernet@4500000 {
-            compatible = "allwinner,sun20i-d1-emac";
-            reg = <0x04500000 0x10000>;
-            interrupts = <0 46 4>;
-            interrupt-names = "macirq";
-            clocks = <&ccu 77>;
-            clock-names = "stmmaceth";
-            resets = <&ccu 30>;
-            reset-names = "stmmaceth";
-            status = "disabled"; /* 暂时关闭以防干扰，进系统后再开 */
         };
     };
 };

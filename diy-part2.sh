@@ -1,76 +1,56 @@
 #!/bin/bash
 #
-# diy-part2.sh: T113-i OpenWrt 最终决胜脚本 (Session 5.5 - Robust Patching)
+# diy-part2.sh: T113-i 最终决胜脚本 (Session 5.5 - Zero Patch Edition)
 #
 
 DTS_NAME="sun8i-t113-tronlong-minievm"
-KERNEL_VER="6.12"
-PATCH_DIR="target/linux/sunxi/patches-$KERNEL_VER"
 IMAGE_MK="target/linux/sunxi/image/cortexa7.mk"
+IMAGE_MAKEFILE="target/linux/sunxi/image/Makefile"
 
-echo ">>> Starting T113-i Professional Adaptation (Session 5.5)..."
+echo ">>> Starting T113-i Adaptation (Session 5.5)..."
 
-# 1. 部署自定义设备树
+# 1. 部署双核补全版 DTS (包含 PSCI 和 24M Timer)
 mkdir -p target/linux/sunxi/files/arch/arm/boot/dts
 if [ -f "files/$DTS_NAME.dts" ]; then
     cp "files/$DTS_NAME.dts" target/linux/sunxi/files/arch/arm/boot/dts/
-    echo "✅ Custom DTS deployed."
+    echo "✅ Dual-core DTS deployed."
 fi
 
-# 2. 引入 Armbian 补丁
-ARMBIAN_PATCH_RAW="https://raw.githubusercontent.com/armbian/build/master/patch/kernel/archive/sunxi-6.12"
-echo ">>> Ingesting Armbian stability patches..."
-mkdir -p $PATCH_DIR
-patches=(
-    "general-sunxi-t113s-ccu-fixes.patch"
-    "general-sunxi-t113-thermal-support.patch"
-)
-for p in "${patches[@]}"; do
-    wget -q "$ARMBIAN_PATCH_RAW/$p" -O "$PATCH_DIR/900-$p" && echo "✅ Patch added: $p"
-done
-
-# 3. 【核心修复】创建鲁棒性内核补丁，拆除 D1 驱动的架构限制
-# 使用精准匹配而非行号，确保 100% 成功
-echo ">>> Creating robust Kernel dependency patch..."
-# 注意：下面使用 printf "\t" 来确保生成真正的 Tab 键
-cat <<EOF > "$PATCH_DIR/999-support-t113-arm-on-d1-drivers.patch"
---- a/drivers/clk/sunxi-ng/Kconfig
-+++ b/drivers/clk/sunxi-ng/Kconfig
-@@ -10,3 +10,3 @@ config SUN20I_D1_CCU
-$(printf "\t")tristate "Support for the Allwinner D1 CCU"
--$(printf "\t")depends on RISCV || COMPILE_TEST
-+$(printf "\t")depends on RISCV || ARCH_SUNXI || COMPILE_TEST
-$(printf "\t")default RISCV
---- a/drivers/pinctrl/sunxi/Kconfig
-+++ b/drivers/pinctrl/sunxi/Kconfig
-@@ -82,3 +82,3 @@ config PINCTRL_SUN20I_D1
-$(printf "\t")tristate "Support for the Allwinner D1 pinctrl"
--$(printf "\t")depends on RISCV || COMPILE_TEST
-+$(printf "\t")depends on RISCV || ARCH_SUNXI || COMPILE_TEST
-$(printf "\t")default RISCV
-EOF
-echo "✅ Robust patch created."
-
-# 4. 强制内核配置
+# 2. 内核配置强刷 (核心：利用 COMPILE_TEST 解锁驱动)
 for f in target/linux/sunxi/config-*; do
     [ -e "$f" ] || continue
     echo "Processing kernel config: $f"
-    # 强制开启 D1/T113 共享驱动 (补丁生效后这里才能真正起作用)
+
+    # --- [关键] 开启编译测试模式，以此解锁 D1 的时钟和引脚驱动 ---
+    echo "CONFIG_COMPILE_TEST=y" >> $f
     echo "CONFIG_CLK_SUN20I_D1=y" >> $f
     echo "CONFIG_PINCTRL_SUN20I_D1=y" >> $f
     echo "CONFIG_CLK_SUN8I_T113=y" >> $f
-    # 开启 SMP 和核心组件
+
+    # --- 开启多核 SMP 支持 ---
+    sed -i 's/CONFIG_SMP=n/CONFIG_SMP=y/g' $f
     echo "CONFIG_SMP=y" >> $f
     echo "CONFIG_NR_CPUS=2" >> $f
     echo "CONFIG_ARM_PSCI=y" >> $f
-    echo "CONFIG_MMC_SUNXI=y" >> $f
-    echo "CONFIG_EXT4_FS=y" >> $f
+
+    # --- 驱动强内置 (y) ---
+    sed -i 's/CONFIG_MMC=m/CONFIG_MMC=y/g' $f
+    sed -i 's/CONFIG_MMC_BLOCK=m/CONFIG_MMC_BLOCK=y/g' $f
+    sed -i 's/CONFIG_MMC_SUNXI=m/CONFIG_MMC_SUNXI=y/g' $f
+    sed -i 's/CONFIG_EXT4_FS=m/CONFIG_EXT4_FS=y/g' $f
+    
+    # --- 架构核心组件 ---
+    echo "CONFIG_ARM_ARCH_TIMER=y" >> $f
+    echo "CONFIG_ARM_GIC=y" >> $f
+    echo "CONFIG_GENERIC_IRQ_CHIP=y" >> $f
     echo "CONFIG_CLK_IGNORE_UNUSED=y" >> $f
+
+    # --- 调试增强 ---
     echo "CONFIG_DEBUG_KERNEL=y" >> $f
     echo "CONFIG_INITCALL_DEBUG=y" >> $f
 done
 
-# 5. 注册机型到 OpenWrt
+# 3. 注册机型到 OpenWrt
 if [ -f "$IMAGE_MK" ]; then
     if ! grep -q "Device/tronlong_tlt113-minievm" "$IMAGE_MK"; then
         cat <<EOF >> "$IMAGE_MK"
@@ -87,10 +67,9 @@ EOF
     fi
 fi
 
-# 6. 绕过打包校验
-IMAGE_MAKEFILE="target/linux/sunxi/image/Makefile"
+# 4. 绕过打包校验
 if [ -f "$IMAGE_MAKEFILE" ]; then
     sed -i '/image_prepare:/a \	mkdir -p $(STAGING_DIR_IMAGE) && touch $(STAGING_DIR_IMAGE)/sunxi-boot.scr && touch $(STAGING_DIR_IMAGE)/$(DEVICE_UBOOT)-boot.scr' "$IMAGE_MAKEFILE"
 fi
 
-echo ">>> [Session 5.5] Adaptation Script Finished."
+echo ">>> Adaptation Script Finished Successfully."

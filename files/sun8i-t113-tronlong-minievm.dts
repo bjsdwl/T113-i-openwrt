@@ -16,36 +16,31 @@
 
     chosen {
         stdout-path = "serial0:115200n8";
-        /* 预设启动参数，配合 clk_ignore_unused 和 initcall_debug 深度调试 */
+        /* 默认 root 改为 mmcblk0p5，因为主线内核通常将第一个探测到的 SD 卡识别为 mmcblk0 */
         bootargs = "console=ttyS0,115200 earlycon=uart8250,mmio32,0x02500000 root=/dev/mmcblk0p5 rootwait panic=10 clk_ignore_unused initcall_debug=1";
     };
 
-    /* 架构定时器：解决内核启动挂起的“心脏” */
+    /* 架构定时器：已通过 24MHz 频率修正解决挂起 */
     timer {
         compatible = "arm,armv7-timer";
-        interrupts = <1 13 0xf08>, /* GIC_PPI 13: Secure Phys */
-                     <1 14 0xf08>, /* GIC_PPI 14: Non-secure Phys */
-                     <1 11 0xf08>, /* GIC_PPI 11: Virtual */
-                     <1 10 0xf08>; /* GIC_PPI 10: Hypervisor */
+        interrupts = <1 13 0xf08>,
+                     <1 14 0xf08>,
+                     <1 11 0xf08>,
+                     <1 10 0xf08>;
         interrupt-parent = <&gic>;
-        /* 关键：强制指定频率，防范 U-Boot 未初始化 CNTFRQ 寄存器 */
         clock-frequency = <24000000>;
     };
 
-    /* 物理布局避障：井水不犯河水 */
     reserved-memory {
         #address-cells = <1>;
         #size-cells = <1>;
         ranges;
 
-        /* 1. OP-TEE 保留区 (U-Boot 已确认地址) */
         optee_reserve: optee@41c00000 {
             reg = <0x41c00000 0x1000000>;
             no-map;
         };
 
-        /* 2. 官方 U-Boot 动态注入的显示保留区 (经日志诊断确认) */
-        /* 提前在静态 DTS 中声明，防止内核 Page Table 冲突 */
         display_reserve: display@4c8dd000 {
             reg = <0x4c8dd000 0x7e9000>;
             no-map;
@@ -60,7 +55,7 @@
             compatible = "arm,cortex-a7";
             device_type = "cpu";
             reg = <0>;
-            clocks = <&ccu 0>; /* CLK_CPUX */
+            clocks = <&ccu 0>;
         };
 
         cpu1: cpu@1 {
@@ -71,7 +66,6 @@
         };
     };
 
-    /* 外部晶振定义 */
     osc24M: osc24M_clk {
         #clock-cells = <0>;
         compatible = "fixed-clock";
@@ -86,7 +80,6 @@
         clock-output-names = "osc32k";
     };
 
-    /* 板载固定电压源 */
     reg_vcc3v3: vcc3v3 {
         compatible = "regulator-fixed";
         regulator-name = "vcc3v3";
@@ -101,7 +94,6 @@
         #size-cells = <1>;
         ranges;
 
-        /* 中断控制器 GIC-400 */
         gic: interrupt-controller@3021000 {
             compatible = "arm,gic-400";
             reg = <0x03021000 0x1000>,
@@ -113,9 +105,9 @@
             device_type = "interrupt-controller";
         };
 
-        /* 时钟控制单元 CCU：修正为 sun8i 兼容字符串 */
+        /* CCU: 增加 sun20i-d1 兼容名以匹配主线驱动 */
         ccu: clock-controller@2001000 {
-            compatible = "allwinner,sun8i-t113s-ccu";
+            compatible = "allwinner,sun8i-t113s-ccu", "allwinner,sun20i-d1-ccu";
             reg = <0x02001000 0x1000>;
             clocks = <&osc24M>, <&osc32k>;
             clock-names = "hosc", "losc";
@@ -123,9 +115,9 @@
             #reset-cells = <1>;
         };
 
-        /* 引脚控制器 PIO */
+        /* PIO: 增加 sun20i-d1 兼容名 */
         pio: pinctrl@2000000 {
-            compatible = "allwinner,sun8i-t113s-pinctrl";
+            compatible = "allwinner,sun8i-t113s-pinctrl", "allwinner,sun20i-d1-pinctrl";
             reg = <0x02000000 0x800>;
             interrupts = <0 14 4>, <0 15 4>;
             clocks = <&ccu 13>, <&osc24M>, <&osc32k>;
@@ -148,34 +140,33 @@
             };
         };
 
-        /* 调试串口 UART0 */
         uart0: serial@2500000 {
             compatible = "snps,dw-apb-uart";
             reg = <0x02500000 0x400>;
             interrupts = <0 2 4>;
             reg-shift = <2>;
             reg-io-width = <4>;
-            clocks = <&ccu 62>; /* CLK_BUS_UART0 */
-            resets = <&ccu 18>; /* RST_BUS_UART0 */
+            clocks = <&ccu 62>;
+            resets = <&ccu 18>;
             status = "okay";
             pinctrl-names = "default";
             pinctrl-0 = <&uart0_pg_pins>;
         };
 
-        /* SD卡接口 MMC0 */
+        /* MMC0: 增加 sun20i-d1 兼容名 */
         mmc0: mmc@4020000 {
-            compatible = "allwinner,sun8i-t113s-mmc";
+            compatible = "allwinner,sun8i-t113s-mmc", "allwinner,sun20i-d1-mmc";
             reg = <0x04020000 0x1000>;
             interrupts = <0 39 4>;
-            clocks = <&ccu 59>, <&ccu 56>; /* CLK_BUS_MMC0, CLK_MMC0 */
+            clocks = <&ccu 59>, <&ccu 56>;
             clock-names = "ahb", "mmc";
-            resets = <&ccu 15>; /* RST_BUS_MMC0 */
+            resets = <&ccu 15>;
             reset-names = "ahb";
             pinctrl-names = "default";
             pinctrl-0 = <&mmc0_pins>;
             vmmc-supply = <&reg_vcc3v3>;
             bus-width = <4>;
-            cd-gpios = <&pio 5 6 1>; /* PF6: SD卡检测 */
+            cd-gpios = <&pio 5 6 1>;
             status = "okay";
         };
     };

@@ -1,53 +1,178 @@
-#!/bin/bash
-#
-# diy-part2.sh: T113-i OpenWrt 最终决胜脚本 (Session 5.4)
-#
+/dts-v1/;
 
-DTS_NAME="sun8i-t113-tronlong-minievm"
-KERNEL_VER="6.12"
-PATCH_DIR="target/linux/sunxi/patches-$KERNEL_VER"
+/ {
+    model = "Tronlong TLT113-MiniEVM (OpenWrt)";
+    compatible = "tronlong,tlt113-minievm", "allwinner,sun8i-t113s", "allwinner,sun8i";
 
-echo ">>> Starting T113-i Core Driver Unlock..."
+    #address-cells = <1>;
+    #size-cells = <1>;
 
-# 1. 部署双核补全版 DTS (保持不变)
-mkdir -p target/linux/sunxi/files/arch/arm/boot/dts
-[ -f "files/$DTS_NAME.dts" ] && cp "files/$DTS_NAME.dts" target/linux/sunxi/files/arch/arm/boot/dts/
+    interrupt-parent = <&gic>;
 
-# 2. 引入 Armbian 补丁
-ARMBIAN_PATCH_RAW="https://raw.githubusercontent.com/armbian/build/master/patch/kernel/archive/sunxi-6.12"
-mkdir -p $PATCH_DIR
-for p in "general-sunxi-t113s-ccu-fixes.patch" "general-sunxi-t113-thermal-support.patch"; do
-    wget -q "$ARMBIAN_PATCH_RAW/$p" -O "$PATCH_DIR/900-$p"
-done
+    /* 核心补丁：添加 PSCI 节点，告知内核通过固件唤醒次核心 */
+    psci {
+        compatible = "arm,psci-1.0", "arm,psci-0.2";
+        method = "smc";
+    };
 
-# 3. 【核心手术】拆除内核源码中对 D1 驱动的 RISCV 架构限制
-# 这步不执行，T113 在 ARM 架构下就永远拿不到时钟驱动
-echo ">>> Unlocking D1 drivers for ARM architecture..."
-KCONFIG_CCU="build_dir/target-arm_*/linux-sunxi_cortexa7/linux-6.12*/drivers/clk/sunxi-ng/Kconfig"
-KCONFIG_PIO="build_dir/target-arm_*/linux-sunxi_cortexa7/linux-6.12*/drivers/pinctrl/sunxi/Kconfig"
+    aliases {
+        serial0 = &uart0;
+        mmc0 = &mmc0;
+    };
 
-# 由于 build_dir 在 compile 阶段才生成，我们改用 find 直接在源码树预处理
-find . -name "Kconfig" -path "*/sunxi-ng/*" -exec sed -i 's/depends on RISCV/depends on RISCV || ARCH_SUNXI/g' {} +
-find . -name "Kconfig" -path "*/pinctrl/sunxi/*" -exec sed -i 's/depends on RISCV/depends on RISCV || ARCH_SUNXI/g' {} +
+    chosen {
+        stdout-path = "serial0:115200n8";
+        bootargs = "console=ttyS0,115200 earlycon=uart8250,mmio32,0x02500000 root=/dev/mmcblk0p5 rootwait panic=10 clk_ignore_unused initcall_debug=1";
+    };
 
-# 4. 强制内核配置
-for f in target/linux/sunxi/config-*; do
-    [ -e "$f" ] || continue
-    # 开启核心共用驱动
-    echo "CONFIG_CLK_SUN20I_D1=y" >> $f
-    echo "CONFIG_PINCTRL_SUN20I_D1=y" >> $f
-    echo "CONFIG_CLK_SUN8I_T113=y" >> $f
-    # 开启双核与预留调试
-    echo "CONFIG_SMP=y" >> $f
-    echo "CONFIG_NR_CPUS=2" >> $f
-    echo "CONFIG_ARM_PSCI=y" >> $f
-    echo "CONFIG_MMC_SUNXI=y" >> $f
-    echo "CONFIG_EXT4_FS=y" >> $f
-    echo "CONFIG_CLK_IGNORE_UNUSED=y" >> $f
-done
+    timer {
+        compatible = "arm,armv7-timer";
+        interrupts = <1 13 0xf08>,
+                     <1 14 0xf08>,
+                     <1 11 0xf08>,
+                     <1 10 0xf08>;
+        interrupt-parent = <&gic>;
+        clock-frequency = <24000000>;
+    };
 
-# 5. 绕过打包校验
-IMAGE_MAKEFILE="target/linux/sunxi/image/Makefile"
-sed -i '/image_prepare:/a \	mkdir -p $(STAGING_DIR_IMAGE) && touch $(STAGING_DIR_IMAGE)/sunxi-boot.scr && touch $(STAGING_DIR_IMAGE)/$(DEVICE_UBOOT)-boot.scr' "$IMAGE_MAKEFILE"
+    reserved-memory {
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
 
-echo ">>> [Session 5.4] Adaptation Completed."
+        optee_reserve: optee@41c00000 {
+            reg = <0x41c00000 0x1000000>;
+            no-map;
+        };
+
+        display_reserve: display@4c8dd000 {
+            reg = <0x4c8dd000 0x7e9000>;
+            no-map;
+        };
+    };
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        cpu0: cpu@0 {
+            compatible = "arm,cortex-a7";
+            device_type = "cpu";
+            reg = <0>;
+            clocks = <&ccu 0>;
+            /* 告知 CPU0 使用 PSCI */
+            enable-method = "psci";
+        };
+
+        cpu1: cpu@1 {
+            compatible = "arm,cortex-a7";
+            device_type = "cpu";
+            reg = <1>;
+            clocks = <&ccu 0>;
+            /* 告知 CPU1 使用 PSCI */
+            enable-method = "psci";
+        };
+    };
+
+    osc24M: osc24M_clk {
+        #clock-cells = <0>;
+        compatible = "fixed-clock";
+        clock-frequency = <24000000>;
+        clock-output-names = "osc24M";
+    };
+
+    osc32k: osc32k_clk {
+        #clock-cells = <0>;
+        compatible = "fixed-clock";
+        clock-frequency = <32768>;
+        clock-output-names = "osc32k";
+    };
+
+    reg_vcc3v3: vcc3v3 {
+        compatible = "regulator-fixed";
+        regulator-name = "vcc3v3";
+        regulator-min-microvolt = <3300000>;
+        regulator-max-microvolt = <3300000>;
+        regulator-always-on;
+    };
+
+    soc {
+        compatible = "simple-bus";
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+
+        gic: interrupt-controller@3021000 {
+            compatible = "arm,gic-400";
+            reg = <0x03021000 0x1000>,
+                  <0x03022000 0x2000>,
+                  <0x03024000 0x2000>,
+                  <0x03026000 0x2000>;
+            interrupt-controller;
+            #interrupt-cells = <3>;
+            device_type = "interrupt-controller";
+        };
+
+        ccu: clock-controller@2001000 {
+            compatible = "allwinner,sun8i-t113s-ccu", "allwinner,sun20i-d1-ccu";
+            reg = <0x02001000 0x1000>;
+            clocks = <&osc24M>, <&osc32k>;
+            clock-names = "hosc", "losc";
+            #clock-cells = <1>;
+            #reset-cells = <1>;
+        };
+
+        pio: pinctrl@2000000 {
+            compatible = "allwinner,sun8i-t113s-pinctrl", "allwinner,sun20i-d1-pinctrl";
+            reg = <0x02000000 0x800>;
+            interrupts = <0 14 4>, <0 15 4>;
+            clocks = <&ccu 13>, <&osc24M>, <&osc32k>;
+            clock-names = "apb", "hosc", "losc";
+            gpio-controller;
+            #gpio-cells = <3>;
+            interrupt-controller;
+            #interrupt-cells = <3>;
+
+            uart0_pg_pins: uart0-pg-pins {
+                pins = "PG17", "PG18";
+                function = "uart0";
+            };
+
+            mmc0_pins: mmc0-pins {
+                pins = "PF0", "PF1", "PF2", "PF3", "PF4", "PF5";
+                function = "mmc0";
+                drive-strength = <30>;
+                bias-pull-up;
+            };
+        };
+
+        uart0: serial@2500000 {
+            compatible = "snps,dw-apb-uart";
+            reg = <0x02500000 0x400>;
+            interrupts = <0 2 4>;
+            reg-shift = <2>;
+            reg-io-width = <4>;
+            clocks = <&ccu 62>;
+            resets = <&ccu 18>;
+            status = "okay";
+            pinctrl-names = "default";
+            pinctrl-0 = <&uart0_pg_pins>;
+        };
+
+        mmc0: mmc@4020000 {
+            compatible = "allwinner,sun8i-t113s-mmc", "allwinner,sun20i-d1-mmc";
+            reg = <0x04020000 0x1000>;
+            interrupts = <0 39 4>;
+            clocks = <&ccu 59>, <&ccu 56>;
+            clock-names = "ahb", "mmc";
+            resets = <&ccu 15>;
+            reset-names = "ahb";
+            pinctrl-names = "default";
+            pinctrl-0 = <&mmc0_pins>;
+            vmmc-supply = <&reg_vcc3v3>;
+            bus-width = <4>;
+            cd-gpios = <&pio 5 6 1>;
+            status = "okay";
+        };
+    };
+};

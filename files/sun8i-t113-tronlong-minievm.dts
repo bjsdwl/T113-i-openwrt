@@ -9,6 +9,12 @@
 
     interrupt-parent = <&gic>;
 
+    /* 核心补丁：添加 PSCI 节点，告知内核通过固件唤醒次核心 */
+    psci {
+        compatible = "arm,psci-1.0", "arm,psci-0.2";
+        method = "smc";
+    };
+
     aliases {
         serial0 = &uart0;
         mmc0 = &mmc0;
@@ -16,11 +22,9 @@
 
     chosen {
         stdout-path = "serial0:115200n8";
-        /* 默认 root 改为 mmcblk0p5，因为主线内核通常将第一个探测到的 SD 卡识别为 mmcblk0 */
         bootargs = "console=ttyS0,115200 earlycon=uart8250,mmio32,0x02500000 root=/dev/mmcblk0p5 rootwait panic=10 clk_ignore_unused initcall_debug=1";
     };
 
-    /* 架构定时器：已通过 24MHz 频率修正解决挂起 */
     timer {
         compatible = "arm,armv7-timer";
         interrupts = <1 13 0xf08>,
@@ -56,6 +60,8 @@
             device_type = "cpu";
             reg = <0>;
             clocks = <&ccu 0>;
+            /* 告知 CPU0 使用 PSCI */
+            enable-method = "psci";
         };
 
         cpu1: cpu@1 {
@@ -63,6 +69,8 @@
             device_type = "cpu";
             reg = <1>;
             clocks = <&ccu 0>;
+            /* 告知 CPU1 使用 PSCI */
+            enable-method = "psci";
         };
     };
 
@@ -105,7 +113,6 @@
             device_type = "interrupt-controller";
         };
 
-        /* CCU: 增加 sun20i-d1 兼容名以匹配主线驱动 */
         ccu: clock-controller@2001000 {
             compatible = "allwinner,sun8i-t113s-ccu", "allwinner,sun20i-d1-ccu";
             reg = <0x02001000 0x1000>;
@@ -115,7 +122,6 @@
             #reset-cells = <1>;
         };
 
-        /* PIO: 增加 sun20i-d1 兼容名 */
         pio: pinctrl@2000000 {
             compatible = "allwinner,sun8i-t113s-pinctrl", "allwinner,sun20i-d1-pinctrl";
             reg = <0x02000000 0x800>;
@@ -153,7 +159,6 @@
             pinctrl-0 = <&uart0_pg_pins>;
         };
 
-        /* MMC0: 增加 sun20i-d1 兼容名 */
         mmc0: mmc@4020000 {
             compatible = "allwinner,sun8i-t113s-mmc", "allwinner,sun20i-d1-mmc";
             reg = <0x04020000 0x1000>;

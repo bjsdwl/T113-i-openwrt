@@ -1,75 +1,53 @@
 #!/bin/bash
 #
-# diy-part2.sh: T113-i 最终决胜脚本 (Session 5.5 - Zero Patch Edition)
+# diy-part2.sh: T113-i OpenWrt 最终决胜脚本 (Session 5.4)
 #
 
 DTS_NAME="sun8i-t113-tronlong-minievm"
-IMAGE_MK="target/linux/sunxi/image/cortexa7.mk"
-IMAGE_MAKEFILE="target/linux/sunxi/image/Makefile"
+KERNEL_VER="6.12"
+PATCH_DIR="target/linux/sunxi/patches-$KERNEL_VER"
 
-echo ">>> Starting T113-i Adaptation (Session 5.5)..."
+echo ">>> Starting T113-i Core Driver Unlock..."
 
-# 1. 部署双核补全版 DTS (包含 PSCI 和 24M Timer)
+# 1. 部署双核补全版 DTS (保持不变)
 mkdir -p target/linux/sunxi/files/arch/arm/boot/dts
-if [ -f "files/$DTS_NAME.dts" ]; then
-    cp "files/$DTS_NAME.dts" target/linux/sunxi/files/arch/arm/boot/dts/
-    echo "✅ Dual-core DTS deployed."
-fi
+[ -f "files/$DTS_NAME.dts" ] && cp "files/$DTS_NAME.dts" target/linux/sunxi/files/arch/arm/boot/dts/
 
-# 2. 内核配置强刷 (核心：利用 COMPILE_TEST 解锁驱动)
+# 2. 引入 Armbian 补丁
+ARMBIAN_PATCH_RAW="https://raw.githubusercontent.com/armbian/build/master/patch/kernel/archive/sunxi-6.12"
+mkdir -p $PATCH_DIR
+for p in "general-sunxi-t113s-ccu-fixes.patch" "general-sunxi-t113-thermal-support.patch"; do
+    wget -q "$ARMBIAN_PATCH_RAW/$p" -O "$PATCH_DIR/900-$p"
+done
+
+# 3. 【核心手术】拆除内核源码中对 D1 驱动的 RISCV 架构限制
+# 这步不执行，T113 在 ARM 架构下就永远拿不到时钟驱动
+echo ">>> Unlocking D1 drivers for ARM architecture..."
+KCONFIG_CCU="build_dir/target-arm_*/linux-sunxi_cortexa7/linux-6.12*/drivers/clk/sunxi-ng/Kconfig"
+KCONFIG_PIO="build_dir/target-arm_*/linux-sunxi_cortexa7/linux-6.12*/drivers/pinctrl/sunxi/Kconfig"
+
+# 由于 build_dir 在 compile 阶段才生成，我们改用 find 直接在源码树预处理
+find . -name "Kconfig" -path "*/sunxi-ng/*" -exec sed -i 's/depends on RISCV/depends on RISCV || ARCH_SUNXI/g' {} +
+find . -name "Kconfig" -path "*/pinctrl/sunxi/*" -exec sed -i 's/depends on RISCV/depends on RISCV || ARCH_SUNXI/g' {} +
+
+# 4. 强制内核配置
 for f in target/linux/sunxi/config-*; do
     [ -e "$f" ] || continue
-    echo "Processing kernel config: $f"
-
-    # --- [关键] 开启编译测试模式，以此解锁 D1 的时钟和引脚驱动 ---
-    echo "CONFIG_COMPILE_TEST=y" >> $f
+    # 开启核心共用驱动
     echo "CONFIG_CLK_SUN20I_D1=y" >> $f
     echo "CONFIG_PINCTRL_SUN20I_D1=y" >> $f
     echo "CONFIG_CLK_SUN8I_T113=y" >> $f
-
-    # --- 开启多核 SMP 支持 ---
-    sed -i 's/CONFIG_SMP=n/CONFIG_SMP=y/g' $f
+    # 开启双核与预留调试
     echo "CONFIG_SMP=y" >> $f
     echo "CONFIG_NR_CPUS=2" >> $f
     echo "CONFIG_ARM_PSCI=y" >> $f
-
-    # --- 驱动强内置 (y) ---
-    sed -i 's/CONFIG_MMC=m/CONFIG_MMC=y/g' $f
-    sed -i 's/CONFIG_MMC_BLOCK=m/CONFIG_MMC_BLOCK=y/g' $f
-    sed -i 's/CONFIG_MMC_SUNXI=m/CONFIG_MMC_SUNXI=y/g' $f
-    sed -i 's/CONFIG_EXT4_FS=m/CONFIG_EXT4_FS=y/g' $f
-    
-    # --- 架构核心组件 ---
-    echo "CONFIG_ARM_ARCH_TIMER=y" >> $f
-    echo "CONFIG_ARM_GIC=y" >> $f
-    echo "CONFIG_GENERIC_IRQ_CHIP=y" >> $f
+    echo "CONFIG_MMC_SUNXI=y" >> $f
+    echo "CONFIG_EXT4_FS=y" >> $f
     echo "CONFIG_CLK_IGNORE_UNUSED=y" >> $f
-
-    # --- 调试增强 ---
-    echo "CONFIG_DEBUG_KERNEL=y" >> $f
-    echo "CONFIG_INITCALL_DEBUG=y" >> $f
 done
 
-# 3. 注册机型到 OpenWrt
-if [ -f "$IMAGE_MK" ]; then
-    if ! grep -q "Device/tronlong_tlt113-minievm" "$IMAGE_MK"; then
-        cat <<EOF >> "$IMAGE_MK"
+# 5. 绕过打包校验
+IMAGE_MAKEFILE="target/linux/sunxi/image/Makefile"
+sed -i '/image_prepare:/a \	mkdir -p $(STAGING_DIR_IMAGE) && touch $(STAGING_DIR_IMAGE)/sunxi-boot.scr && touch $(STAGING_DIR_IMAGE)/$(DEVICE_UBOOT)-boot.scr' "$IMAGE_MAKEFILE"
 
-define Device/tronlong_tlt113-minievm
-  DEVICE_VENDOR := Tronlong
-  DEVICE_MODEL := TLT113-MiniEVM
-  DEVICE_DTS := $DTS_NAME
-  SUPPORTED_DEVICES := tronlong,tlt113-minievm
-  KERNEL := kernel-bin
-endef
-TARGET_DEVICES += tronlong_tlt113-minievm
-EOF
-    fi
-fi
-
-# 4. 绕过打包校验
-if [ -f "$IMAGE_MAKEFILE" ]; then
-    sed -i '/image_prepare:/a \	mkdir -p $(STAGING_DIR_IMAGE) && touch $(STAGING_DIR_IMAGE)/sunxi-boot.scr && touch $(STAGING_DIR_IMAGE)/$(DEVICE_UBOOT)-boot.scr' "$IMAGE_MAKEFILE"
-fi
-
-echo ">>> Adaptation Script Finished Successfully."
+echo ">>> [Session 5.4] Adaptation Completed."

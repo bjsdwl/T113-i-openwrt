@@ -9,14 +9,12 @@
 
     interrupt-parent = <&gic>;
 
-    /* 别名映射：解决官方 U-Boot 强传 mmcblk1p5 的路径问题 */
     aliases {
         serial0 = &uart0;
         mmc0 = &mmc0;
-        mmc1 = &mmc0; /* 这里的 mmc1 别名指向物理 mmc0 节点 */
     };
 
-    /* 多核启动支持 */
+    /* PSCI: 解决多核唤醒 */
     psci {
         compatible = "arm,psci-1.0", "arm,psci-0.2";
         method = "smc";
@@ -24,8 +22,8 @@
 
     chosen {
         stdout-path = "serial0:115200n8";
-        /* 虽然加了别名，我们依然在 bootargs 里写 mmcblk1p5 以匹配 U-Boot 环境变量 */
-        bootargs = "console=ttyS0,115200 earlycon=uart8250,mmio32,0x02500000 root=/dev/mmcblk1p5 rootwait panic=10 clk_ignore_unused initcall_debug=1";
+        /* 注意：这里虽然写了，但内核会以 diy-part2.sh 里的 CONFIG_CMDLINE_FORCE 为准 */
+        bootargs = "console=ttyS0,115200 earlycon=uart8250,mmio32,0x02500000 root=/dev/mmcblk0p5 rootwait panic=10 clk_ignore_unused initcall_debug=1";
     };
 
     timer {
@@ -128,8 +126,7 @@
         pio: pinctrl@2000000 {
             compatible = "allwinner,sun8i-t113s-pinctrl", "allwinner,sun20i-d1-pinctrl";
             reg = <0x02000000 0x800>;
-            /* 核心修正：补全全部 6 个中断 (Index 0-5) 对应 Bank B-G */
-            /* 解决了 IRQ index 3 not found 报错 */
+            /* 关键点：补齐 6 组中断，解决 Index 3/4/5 not found 错误 */
             interrupts = <0 14 4>, <0 15 4>, <0 16 4>, <0 17 4>, <0 18 4>, <0 19 4>;
             clocks = <&ccu 13>, <&osc24M>, <&osc32k>;
             clock-names = "apb", "hosc", "losc";
@@ -176,7 +173,8 @@
             pinctrl-0 = <&mmc0_pins>;
             vmmc-supply = <&reg_vcc3v3>;
             bus-width = <4>;
-            cd-gpios = <&pio 5 6 1>;
+            /* 强制开启 broken-cd，防止物理检测引脚失效导致不扫卡 */
+            broken-cd;
             status = "okay";
         };
     };

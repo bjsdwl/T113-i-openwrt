@@ -9,21 +9,23 @@
 
     interrupt-parent = <&gic>;
 
-    /* PSCI 节点：支持多核启动 */
+    /* 别名映射：解决官方 U-Boot 强传 mmcblk1p5 的路径问题 */
+    aliases {
+        serial0 = &uart0;
+        mmc0 = &mmc0;
+        mmc1 = &mmc0; /* 这里的 mmc1 别名指向物理 mmc0 节点 */
+    };
+
+    /* 多核启动支持 */
     psci {
         compatible = "arm,psci-1.0", "arm,psci-0.2";
         method = "smc";
     };
 
-    aliases {
-        serial0 = &uart0;
-        mmc0 = &mmc0;
-    };
-
     chosen {
         stdout-path = "serial0:115200n8";
-        /* 修正 root 为 mmcblk0p5，主线内核默认 mmc0 对应 mmcblk0 */
-        bootargs = "console=ttyS0,115200 earlycon=uart8250,mmio32,0x02500000 root=/dev/mmcblk0p5 rootwait panic=10 clk_ignore_unused initcall_debug=1";
+        /* 虽然加了别名，我们依然在 bootargs 里写 mmcblk1p5 以匹配 U-Boot 环境变量 */
+        bootargs = "console=ttyS0,115200 earlycon=uart8250,mmio32,0x02500000 root=/dev/mmcblk1p5 rootwait panic=10 clk_ignore_unused initcall_debug=1";
     };
 
     timer {
@@ -126,8 +128,9 @@
         pio: pinctrl@2000000 {
             compatible = "allwinner,sun8i-t113s-pinctrl", "allwinner,sun20i-d1-pinctrl";
             reg = <0x02000000 0x800>;
-            /* 关键补丁：必须补齐三个中断，解决 Index 2 (SPI 17) 缺失导致的 ENXIO 错误 */
-            interrupts = <0 14 4>, <0 15 4>, <0 17 4>;
+            /* 核心修正：补全全部 6 个中断 (Index 0-5) 对应 Bank B-G */
+            /* 解决了 IRQ index 3 not found 报错 */
+            interrupts = <0 14 4>, <0 15 4>, <0 16 4>, <0 17 4>, <0 18 4>, <0 19 4>;
             clocks = <&ccu 13>, <&osc24M>, <&osc32k>;
             clock-names = "apb", "hosc", "losc";
             gpio-controller;

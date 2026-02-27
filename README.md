@@ -84,7 +84,7 @@ docker run -it --rm \
   -u $(id -u):$(id -g) \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
-  tina-env-v3 \
+  tina-env-v4 \
   /bin/bash
 ```
 
@@ -109,14 +109,15 @@ cd tina5.0_v1.0
 source build/envsetup.sh
 
 # 3. 选择板型
+./build.sh config
 # 创龙 T113 MiniEVM NAND 通常选 7 (tlt113-minievm-nand)
-lunch
+./build.sh
 
 # 4. 编译 (全速)
 make -j$(nproc)
 
 # 5. 打包生成固件
-pack
+./build.sh pack
 ```
 
 ### 场景 B：OpenWrt 移花接木 (打包 OpenWrt 内核)
